@@ -631,8 +631,9 @@ const EVAL_SCHEMA = {
   required: ["resumen", "criterios", "fortalezas", "a_mejorar", "como_encaro", "preguntas_entrevista", "expresion"],
   additionalProperties: false
 };
-// Gemini cachea solo (caché implícito) cuando el principio del prompt se repite; lo informa en
-// prompt_tokens_details.cached_tokens, que ya está incluido dentro de prompt_tokens.
+// Gemini cachea solo (caché implícito) cuando el principio del prompt se repite (mínimo ~4096 tokens en Flash).
+// Por la API nativa lo informa; por este endpoint compatible con OpenAI hoy no lo devuelve, pero si algún día
+// llega en prompt_tokens_details.cached_tokens (incluido dentro de prompt_tokens), se registra.
 function usoGemini(u) {
   const r = Number((u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || u.cached_tokens || 0);
   return { in: u.prompt_tokens, out: u.completion_tokens, cacheWrite: 0, cacheRead: r };
@@ -644,6 +645,8 @@ async function runGemini(p, ctx) {
   if (p.system) messages.push({ role: "system", content: p.system });
   p.messages.forEach(m => messages.push({ role: m.role, content: m.content }));
   const body = { model: p.model, messages, max_tokens: p.max_tokens + prov.extraTokens, stream: true };
+  // Sin esto, el streaming de Gemini no informa los tokens usados (solo cambia lo que se registra).
+  body.stream_options = { include_usage: true };
   if (p.purpose === "eval") body.response_format = { type: "json_schema", json_schema: { name: "evaluacion", strict: true, schema: EVAL_SCHEMA } };
   if (prov.reasoning && prov.reasoning !== "default") body.reasoning_effort = prov.reasoning;
   if (p.temperature != null) body.temperature = p.temperature;
