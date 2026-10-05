@@ -92,6 +92,42 @@ const PROVIDERS = {
 };
 const CADENA = [PRIMARY, FALLBACK].filter(Boolean);
 
+// Caché de prompts: el principio de cada consulta (reglas, contexto de la empresa, documentos) se repite,
+// y si es idéntico el proveedor lo cobra a una fracción del precio.
+// - anthropic: se marca con cache_control (PROMPT_CACHE=off lo apaga; PROMPT_CACHE_TTL=1h dura más pero escribir cuesta el doble).
+// - gemini: caché implícito, automático; solo hace falta que el principio del prompt sea idéntico.
+// - claude-sdk: Claude Code ya cachea solo.
+const CACHE = {
+  activo: !/^(off|no|0|false)$/i.test(env("PROMPT_CACHE")),
+  ttl: env("PROMPT_CACHE_TTL") === "1h" ? "1h" : "5m"
+};
+// Cuánto cuesta cada token del caché comparado con uno normal (para estimar el ahorro).
+const PRECIO_CACHE = {
+  anthropic: { lectura: 0.1, escritura: CACHE.ttl === "1h" ? 2 : 1.25 },
+  "claude-sdk": { lectura: 0.1, escritura: 1.25 },
+  gemini: { lectura: 0.1, escritura: 1 }
+};
+// Totales de la sesión (desde que arrancó el servidor), por proveedor. Se ven en /api/diagnostico.
+const USO_SESION = {};
+function sumarUso(id, u) {
+  if (!u || u.in == null) return;
+  const t = USO_SESION[id] || (USO_SESION[id] = { consultas: 0, entrada: 0, escritosEnCache: 0, leidosDelCache: 0, tokensAhorrados: 0 });
+  const escritos = u.cacheWrite || 0, leidos = u.cacheRead || 0, precio = PRECIO_CACHE[id];
+  t.consultas++;
+  t.entrada += u.in;
+  t.escritosEnCache += escritos;
+  t.leidosDelCache += leidos;
+  // Tokens "equivalentes" ahorrados: lo leído del caché sale ~10%, lo escrito puede salir más caro.
+  t.tokensAhorrados += Math.round(leidos * (1 - precio.lectura) - escritos * (precio.escritura - 1));
+}
+function resumenUso() {
+  const out = { activo: CACHE.activo, ttl: CACHE.ttl, proveedores: USO_SESION };
+  const tot = Object.values(USO_SESION).reduce((a, t) => ({ entrada: a.entrada + t.entrada, leidos: a.leidos + t.leidosDelCache, ahorro: a.ahorro + t.tokensAhorrados }), { entrada: 0, leidos: 0, ahorro: 0 });
+  out.tokensAhorrados = tot.ahorro;
+  out.porcentajeCacheado = tot.entrada ? Math.round(tot.leidos / tot.entrada * 100) : 0;
+  return out;
+}
+
 // Robustez
 const T_PRIMER_TOKEN = envNum("LLM_TIMEOUT_MS", 45000);   // si no empieza a responder en este tiempo, se corta
 const T_SILENCIO_STREAM = 60000;                          // si deja de mandar texto a mitad de camino
@@ -233,6 +269,9 @@ function sanitizePayload(payload) {
   const msgs = sanitizeMessages(payload.messages);
   const out = { messages: msgs };
   if (typeof payload.system === "string" && payload.system.trim()) out.system = payload.system.slice(0, 600_000);
+  // Hasta qué carácter el system no cambia entre consultas (para el caché). Si no cierra, se ignora.
+  const est = Number(payload.system_estable);
+  if (out.system && out.system.length === payload.system.length && Number.isInteger(est) && est > 0 && est < out.system.length) out.systemEstable = est;
   const mt = Number(payload.max_tokens);
   out.max_tokens = Number.isFinite(mt) ? Math.min(LIMITS.maxTokens, Math.max(16, Math.round(mt))) : 1024;
   const temp = Number(payload.temperature);
@@ -254,10 +293,19 @@ const pasaAlRespaldo = e => e && e.status !== 400 && e.status !== 413 && e.code 
 function logIA(o) {
   const partes = [`[IA] ${o.proveedor}`, o.modelo, o.purpose, `${(o.ms / 1000).toFixed(1)}s`];
   if (o.ok) partes.push("ok");
-  if (o.tokens && (o.tokens.in != null || o.tokens.out != null)) partes.push(`tokens in=${o.tokens.in ?? "?"} out=${o.tokens.out ?? "?"}`);
+  if (o.tokens && (o.tokens.in != null || o.tokens.out != null)) partes.push(textoTokens(o.tokens));
   if (o.error) partes.push(`ERROR ${o.error.status || ""}${o.error.code ? " " + o.error.code : ""}: ${String(o.error.message).slice(0, 220)}`);
   if (o.nota) partes.push(o.nota);
   console.log("  " + sinSecretos(partes.join(" · ")));
+}
+// "tokens in=5200 (normales=300 caché: escritos=0 leídos=4900, 94% cacheado) out=410"
+function textoTokens(t) {
+  let s = `tokens in=${t.in ?? "?"}`;
+  if (t.in != null && (t.cacheWrite != null || t.cacheRead != null)) {
+    const w = t.cacheWrite || 0, r = t.cacheRead || 0;
+    s += ` (normales=${t.in - w - r} caché: escritos=${w} leídos=${r}, ${t.in ? Math.round(r / t.in * 100) : 0}% cacheado)`;
+  }
+  return s + ` out=${t.out ?? "?"}`;
 }
 
 // ---------- Streaming hacia el navegador ----------
@@ -428,7 +476,8 @@ async function recorrerSdk(q, p, ctx) {
       if (m.type === "system" && m.subtype === "api_retry") { ctx.onRetry && ctx.onRetry(m.attempt, m.error); continue; }
       if (m.type === "result") {
         const u = m.usage || {};
-        ctx.onUsage({ in: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), out: u.output_tokens });
+        ctx.onUsage({ in: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), out: u.output_tokens,
+          cacheWrite: u.cache_creation_input_tokens || 0, cacheRead: u.cache_read_input_tokens || 0 });
         if ((m.is_error || m.subtype !== "success") && !emitio) {
           const txt = String(m.result || (m.errors && m.errors.join(" ")) || m.subtype || "");
           if (/log ?in|\/login|auth|credential|not logged/i.test(txt)) throw provError(401, MSG_SIN_SESION, "sesion");
@@ -471,21 +520,52 @@ function verificarSesionClaude() {
 }
 
 // ---------- Claude (API de Anthropic) ----------
-async function runAnthropic(p, ctx) {
-  const prov = PROVIDERS.anthropic;
+// Cuerpo del pedido. Con caché, el texto es el mismo pero partido en bloques con cache_control:
+// - al final de la parte estable del system (reglas + contexto de la empresa), que se reusa entre chats y acciones;
+// - en el último mensaje, para que el historial anterior también se lea del caché en el turno siguiente
+//   (no en la evaluación: es una sola consulta y escribir en caché cuesta un 25% más).
+function cuerpoAnthropic(p, conCache) {
   const body = { model: p.model, max_tokens: p.max_tokens, messages: p.messages, stream: true };
   if (p.system) body.system = p.system;
   if (p.temperature != null) body.temperature = p.temperature;
+  if (!conCache) return body;
+  const marca = { type: "ephemeral" };
+  if (CACHE.ttl === "1h") marca.ttl = "1h";
+  if (p.system) {
+    const n = p.systemEstable;
+    body.system = n
+      ? [{ type: "text", text: p.system.slice(0, n), cache_control: marca }, { type: "text", text: p.system.slice(n) }]
+      : [{ type: "text", text: p.system, cache_control: marca }];
+  }
+  if (p.purpose !== "eval" && p.messages.length) {
+    const ult = p.messages[p.messages.length - 1];
+    body.messages = [...p.messages.slice(0, -1), { role: ult.role, content: [{ type: "text", text: ult.content, cache_control: marca }] }];
+  }
+  return body;
+}
+
+async function runAnthropic(p, ctx) {
+  const prov = PROVIDERS.anthropic;
+  let conCache = CACHE.activo;
   let upstream;
-  try {
-    upstream = await fetch(prov.baseUrl + "/messages", {
-      method: "POST", signal: ctx.signal,
-      headers: { "content-type": "application/json", "x-api-key": prov.key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify(body)
-    });
-  } catch (e) {
-    if (ctx.signal.aborted) throw e;
-    throw provError(502, "No se pudo conectar con la API de Claude. Revisá tu conexión a internet.", "network");
+  for (;;) {
+    try {
+      upstream = await fetch(prov.baseUrl + "/messages", {
+        method: "POST", signal: ctx.signal,
+        headers: { "content-type": "application/json", "x-api-key": prov.key, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify(cuerpoAnthropic(p, conCache))
+      });
+    } catch (e) {
+      if (ctx.signal.aborted) throw e;
+      throw provError(502, "No se pudo conectar con la API de Claude. Revisá tu conexión a internet.", "network");
+    }
+    if (upstream.ok || !conCache || upstream.status !== 400) break;
+    // Si la API rechaza el pedido por el caché, sale igual que antes: sin caché.
+    let raw = "";
+    try { raw = await upstream.text(); } catch (_) {}
+    if (!/cache/i.test(raw)) { upstream = { ok: false, status: 400, text: async () => raw }; break; }
+    ctx.log && ctx.log("la API rechazó el caché de prompts; reintento sin caché");
+    conCache = false;
   }
   if (!upstream.ok) {
     let raw = "", msg = "";
@@ -497,7 +577,11 @@ async function runAnthropic(p, ctx) {
   }
   await leerSSE(upstream.body, ctx, j => {
     if (j.type === "content_block_delta" && j.delta && j.delta.type === "text_delta" && j.delta.text) ctx.onText(j.delta.text);
-    else if (j.type === "message_start" && j.message && j.message.usage) ctx.onUsage({ in: j.message.usage.input_tokens });
+    else if (j.type === "message_start" && j.message && j.message.usage) {
+      // input_tokens es solo lo que va después del último corte del caché: el total es la suma.
+      const u = j.message.usage, w = u.cache_creation_input_tokens || 0, r = u.cache_read_input_tokens || 0;
+      ctx.onUsage({ in: (u.input_tokens || 0) + w + r, cacheWrite: w, cacheRead: r });
+    }
     else if (j.type === "message_delta" && j.usage) ctx.onUsage({ out: j.usage.output_tokens });
     else if (j.type === "error") {
       const tipo = j.error && j.error.type;
@@ -547,6 +631,12 @@ const EVAL_SCHEMA = {
   required: ["resumen", "criterios", "fortalezas", "a_mejorar", "como_encaro", "preguntas_entrevista", "expresion"],
   additionalProperties: false
 };
+// Gemini cachea solo (caché implícito) cuando el principio del prompt se repite; lo informa en
+// prompt_tokens_details.cached_tokens, que ya está incluido dentro de prompt_tokens.
+function usoGemini(u) {
+  const r = Number((u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || u.cached_tokens || 0);
+  return { in: u.prompt_tokens, out: u.completion_tokens, cacheWrite: 0, cacheRead: r };
+}
 // Usa el endpoint compatible con OpenAI de Gemini.
 async function runGemini(p, ctx) {
   const prov = PROVIDERS.gemini;
@@ -593,12 +683,12 @@ async function runGemini(p, ctx) {
     finish = String((ch && ch.finish_reason) || "");
     const text = (ch && ch.message && (typeof ch.message.content === "string" ? ch.message.content
       : Array.isArray(ch.message.content) ? ch.message.content.map(x => x && x.text || "").join("") : "")) || "";
-    if (j.usage) ctx.onUsage({ in: j.usage.prompt_tokens, out: j.usage.completion_tokens });
+    if (j.usage) ctx.onUsage(usoGemini(j.usage));
     if (text) { emitido += text.length; ctx.onText(text); }
   } else {
     await leerSSE(upstream.body, ctx, j => {
       if (j.error) throw provError(geminiStatus(200, j.error.message || ""), geminiMessage(200, j.error.message || "", p.model));
-      if (j.usage) ctx.onUsage({ in: j.usage.prompt_tokens, out: j.usage.completion_tokens });
+      if (j.usage) ctx.onUsage(usoGemini(j.usage));
       const ch = j.choices && j.choices[0];
       if (!ch) return;
       if (ch.finish_reason) finish = String(ch.finish_reason);
@@ -739,6 +829,7 @@ async function intentar(id, purpose, payload, sse, signal) {
       sse.open();
       sse.text(JSON.stringify(ev));
     }
+    sumarUso(id, usage);
     logIA({ proveedor: id, modelo: model, purpose, ms: Date.now() - t0, ok: true, tokens: usage, nota: ctx.nota });
     return { ok: true };
   } catch (e) {
@@ -754,6 +845,7 @@ async function intentar(id, purpose, payload, sse, signal) {
     } else if (!err || !err.status) {
       err = provError(502, `Falló la comunicación con ${prov.name}: ${(e && e.message) || e}`, "network");
     }
+    sumarUso(id, usage);
     logIA({ proveedor: id, modelo: model, purpose, ms: Date.now() - t0, error: err, tokens: usage });
     return { error: err, empezo };
   } finally {
@@ -862,7 +954,7 @@ async function handleApi(req, res, url) {
   if (url.pathname === "/api/diagnostico") {
     if (req.method !== "GET") return fail(res, 405, "Método no permitido");
     const [principal, respaldo] = await Promise.all([probarProveedor(PRIMARY), FALLBACK ? probarProveedor(FALLBACK) : null]);
-    return json(res, 200, { principal, respaldo, activo: principal.ok ? PRIMARY : respaldo && respaldo.ok ? FALLBACK : null });
+    return json(res, 200, { principal, respaldo, activo: principal.ok ? PRIMARY : respaldo && respaldo.ok ? FALLBACK : null, cache: resumenUso() });
   }
 
   // Consulta a la IA
@@ -1015,6 +1107,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`\n  Tutoring corriendo en  http://localhost:${server.address().port}\n`);
   console.log(`  IA principal: ${descProv(PRIMARY)}`);
   console.log(`  IA de respaldo: ${FALLBACK ? descProv(FALLBACK) : "ninguna (LLM_FALLBACK vacío)"}`);
+  console.log(`  Caché de prompts: ${CACHE.activo ? `activo (duración ${CACHE.ttl}). El ahorro se ve en /api/diagnostico` : "apagado (PROMPT_CACHE=off)"}`);
   for (const id of CADENA) {
     if (id !== "claude-sdk" && !PROVIDERS[id].key) console.log(`  Atención: falta ${PROVIDERS[id].keyVar} en el archivo .env`);
   }

@@ -61,6 +61,9 @@ function trozos(text, n = 12) {
   return out;
 }
 
+// Con caché de prompts, Claude recibe el system y los mensajes partidos en bloques {type:"text"}.
+const plano = c => Array.isArray(c) ? c.map(b => (b && typeof b.text === "string" ? b.text : "")).join("") : c;
+
 const readBody = req => new Promise(res => { let b = ""; req.on("data", c => (b += c)); req.on("end", () => res(b)); });
 
 export async function startFakeLLM() {
@@ -72,9 +75,9 @@ export async function startFakeLLM() {
     const url = req.url.split("?")[0];
     const esGemini = url.endsWith("/chat/completions");
     const msgs = payload.messages || [];
-    const system = esGemini ? (msgs.find(m => m.role === "system") || {}).content : payload.system;
+    const system = plano(esGemini ? (msgs.find(m => m.role === "system") || {}).content : payload.system);
     const users = msgs.filter(m => m.role === "user");
-    const lastUser = users.length ? users[users.length - 1].content : "";
+    const lastUser = users.length ? plano(users[users.length - 1].content) : "";
     calls.push({ url, auth: req.headers.authorization || req.headers["x-api-key"] || req.headers["x-goog-api-key"] || "", payload });
 
     // Tokens efímeros de Gemini Live (POST /v1alpha/auth_tokens).
@@ -92,6 +95,7 @@ export async function startFakeLLM() {
       res.end(JSON.stringify({ error: { message, code: status } }));
     };
     if (caso === "KEY") return jsonErr(400, "API key not valid. Please pass a valid API key.");
+    if (caso === "CACHE" && JSON.stringify(payload).includes("cache_control")) return jsonErr(400, "cache_control: not supported for this model");
     if (caso === "CUOTA") return jsonErr(429, "Resource has been exhausted (e.g. check quota).");
     if (caso === "MODELO") return jsonErr(404, "models/inexistente is not found for API version v1beta");
     if (caso === "APAGADA") return jsonErr(403, "Generative Language API has not been used in project 800111611422 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/generativelanguage.googleapis.com/overview?project=800111611422 then retry.");
@@ -113,7 +117,7 @@ export async function startFakeLLM() {
       return;
     }
 
-    const evaluaciones = calls.filter(c => c.url === url && c.payload.messages.some(m => m.content === lastUser)).length;
+    const evaluaciones = calls.filter(c => c.url === url && c.payload.messages.some(m => plano(m.content) === lastUser)).length;
     const incompleta = caso === "EVAL_TRUNCADA" && evaluaciones === 1;
     const invalida = caso === "EVAL_INVALIDA" && evaluaciones === 1;
     const sinCriterios = caso === "EVAL_SIN_CRITERIOS";
@@ -125,7 +129,8 @@ export async function startFakeLLM() {
       res.write("data: [DONE]\n\n");
     } else {
       const ev = (type, obj) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...obj })}\n\n`);
-      ev("message_start", { message: { role: "assistant" } });
+      // Uso como lo informa Claude: lo marcado con cache_control se escribe la primera vez y se lee después.
+      ev("message_start", { message: { role: "assistant", usage: usoClaude(payload, calls) } });
       ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
       for (const t of trozos(text)) ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: t } });
       ev("content_block_stop", { index: 0 });
@@ -143,4 +148,28 @@ export async function startFakeLLM() {
     live: `http://127.0.0.1:${port}/live`,
     close: () => new Promise(r => server.close(r))
   };
+}
+
+// Simula el caché de Claude: ~4 caracteres por token; cada bloque con cache_control
+// cachea todo el prefijo hasta él. Si un pedido anterior ya cacheó ese prefijo, se lee.
+function usoClaude(payload, calls) {
+  const partes = [];
+  const sys = Array.isArray(payload.system) ? payload.system : payload.system ? [{ text: payload.system }] : [];
+  sys.forEach(b => partes.push(b));
+  (payload.messages || []).forEach(m => (Array.isArray(m.content) ? m.content : [{ text: m.content }]).forEach(b => partes.push(b)));
+  const tok = s => Math.ceil(String(s || "").length / 4);
+  const previos = new Set(calls.slice(0, -1).flatMap(c => c.prefijos || []));
+  const prefijos = [];
+  let texto = "", hasta = 0, escritos = 0, leidos = 0;
+  for (const b of partes) {
+    texto += b.text || "";
+    if (b.cache_control) {
+      const t = tok(texto) - hasta;
+      if (previos.has(texto)) leidos += t; else escritos += t;
+      hasta = tok(texto);
+      prefijos.push(texto);
+    }
+  }
+  calls[calls.length - 1].prefijos = prefijos;
+  return { input_tokens: tok(texto) - hasta, cache_creation_input_tokens: escritos, cache_read_input_tokens: leidos };
 }
