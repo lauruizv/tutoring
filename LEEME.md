@@ -50,6 +50,25 @@ Notas sobre Gemini gratis:
 
 Cada vez que cambies el `.env`, frená el servidor (Ctrl+C) y volvé a ejecutar `npm start`.
 
+## Caché de prompts
+
+Las APIs no guardan memoria entre pedidos: en cada mensaje del mentor se vuelven a mandar las reglas, el contexto de la empresa y los documentos. Si el principio del pedido es idéntico al de una consulta reciente, el proveedor lo lee de su caché y lo cobra a una fracción (~10% del precio normal).
+
+- **Orden del prompt del mentor:** primero lo que no cambia para una empresa (rol, formato, reglas, contexto y documentos) y al final la acción elegida. El texto es el mismo de siempre, solo cambió el orden (`test/prompts.test.mjs` lo compara contra la versión anterior).
+- **`anthropic`:** el servidor marca con `cache_control` el final de la parte estable y el último mensaje, así en el turno siguiente también se reusa el historial. Escribir en caché cuesta un 25% más la primera vez; desde la segunda consulta (dentro de 5 minutos) esa parte sale ~10%. La evaluación no marca su mensaje porque es una sola consulta. Si la API rechazara el caché, el pedido se repite sin caché.
+- **`claude-sdk`:** Claude Code ya cachea solo; no se toca, solo se registra.
+- **`gemini`:** caché implícito y automático cuando el principio se repite y supera ~4096 tokens. El endpoint compatible con OpenAI que usamos no informa los tokens cacheados, así que en el log aparecen los tokens totales sin el detalle del caché.
+
+**Cómo ver el ahorro.** Cada consulta deja una línea en la terminal:
+
+```
+[IA] anthropic · claude-sonnet-5-5 · chat · 3.1s · ok · tokens in=5200 (normales=40 caché: escritos=260 leídos=4900, 94% cacheado) out=410
+```
+
+Y `http://localhost:3000/api/diagnostico` suma, desde que arrancó el servidor, los tokens de entrada, los escritos y leídos del caché, el `% cacheado` y `tokensAhorrados` (estimado en tokens de precio normal: lo leído ahorra el 90%, lo escrito cuesta un poco más). El diagnóstico también hace una consulta corta de prueba a cada proveedor.
+
+Opcionales en el `.env`: `PROMPT_CACHE=off` lo apaga (los pedidos salen exactamente como antes) y `PROMPT_CACHE_TTL=1h` lo hace durar una hora con Claude por API (escribirlo cuesta el doble).
+
 ## Qué hay en cada perfil
 
 | Perfil | Qué hace |
@@ -93,7 +112,7 @@ npm run test:todo  # todo junto
 
 Ninguna prueba usa la API real: todas hablan con la IA falsa de `test/fake-llm.mjs`. La llamada con Gemini Live (`test/voz-gemini.test.mjs`) reemplaza el WebSocket de Google por uno falso que habla el mismo protocolo (audio, transcripciones, interrupciones, colgar) y usa el micrófono falso de Chromium.
 
-`npm test` cubre las rutas del servidor (config, empresa, informes, messages), la traducción del streaming de Gemini al formato de eventos de Claude, el mapeo de errores, path traversal, límites de tamaño, y la lógica de `core.js` (historial que se manda a la IA, parseo del JSON de evaluación, puntaje ponderado, corte de oraciones para la voz).
+`npm test` cubre las rutas del servidor (config, empresa, informes, messages), la traducción del streaming de Gemini al formato de eventos de Claude, el mapeo de errores, path traversal, límites de tamaño, y la lógica de `core.js` (historial que se manda a la IA, parseo del JSON de evaluación, puntaje ponderado, corte de oraciones para la voz) y el caché de prompts (`test/prompts.test.mjs` y `test/cache.test.mjs`: el modelo recibe exactamente el mismo texto que antes).
 
 El recorrido en navegador necesita Playwright, que es **dependencia solo de desarrollo** (la app en producción sigue sin dependencias):
 
