@@ -165,16 +165,13 @@ Revisá lo que pegue con los "Criterios de calidad" de la empresa${sw ? "; si es
     };
   }
 
-  // Se arma en dos partes para aprovechar el caché de prompts del proveedor:
-  // "estable" no cambia entre consultas de una misma empresa (rol, formato, reglas, contexto y documentos)
-  // y va primero; "variable" (la acción elegida) va al final. Sin fechas ni nada aleatorio en la parte estable.
-  function juniorPartes(cfg, accion, nombre) {
+  function junior(cfg, accion, nombre) {
     const sw = C().esSoftware(cfg);
     const resp = C().responsableTexto(cfg);
     const rubro = cfg.rubro ? ` (rubro: ${cfg.rubro})` : "";
     const acc = acciones(cfg);
     const clave = ALIAS_ACCION[accion] || accion;
-    const estable = `Sos el mentor de IA de ${cfg.empresa}${rubro}, entrenado con el contexto que cargó ${resp}. Acompañás a ${nombre}, que acaba de entrar a trabajar. Tu objetivo: que entienda cómo funciona la empresa, cómo se hace cada cosa y POR QUÉ se hace así, y que pueda resolver sus tareas. Hablás en español rioplatense (voseo), claro y directo, con el vocabulario del rubro${sw ? "" : " (no asumas que es una empresa de software)"}.
+    return `Sos el mentor de IA de ${cfg.empresa}${rubro}, entrenado con el contexto que cargó ${resp}. Acompañás a ${nombre}, que acaba de entrar a trabajar. Tu objetivo: que entienda cómo funciona la empresa, cómo se hace cada cosa y POR QUÉ se hace así, y que pueda resolver sus tareas. Hablás en español rioplatense (voseo), claro y directo, con el vocabulario del rubro${sw ? "" : " (no asumas que es una empresa de software)"}.
 
 FORMATO (obligatorio)
 Organizá la respuesta en bloques. Cada bloque empieza, en su propia línea, con una de estas etiquetas escritas tal cual, entre corchetes:
@@ -194,15 +191,11 @@ REGLAS
 - Si toca algo marcado como restricción, decile que lo tiene que ver con ${resp} antes de seguir.
 - No des la respuesta antes de preguntar, pero tampoco escondas información para hacerla sufrir.
 
+${acc[clave] || acc.libre}
+
 CONTEXTO DE LA EMPRESA (cargado por ${resp})
 ${contexto(cfg)}`;
-    return { estable, variable: `\n\n${acc[clave] || acc.libre}` };
   }
 
-  function junior(cfg, accion, nombre) {
-    const p = juniorPartes(cfg, accion, nombre);
-    return p.estable + p.variable;
-  }
-
-  return { voz, vozInicio, evaluacion, junior, juniorPartes, contexto, enPersona, ALIAS_ACCION };
+  return { voz, vozInicio, evaluacion, junior, contexto, enPersona, ALIAS_ACCION };
 })();
