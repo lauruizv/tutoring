@@ -751,9 +751,10 @@
     jCtl = new AbortController();
     const cid = c.id;
     try {
+      const sys = T.prompts.juniorPartes(S.cfg, c.action, firstName(JUNIOR.name));
       reply.content = await T.api.claude({
         purpose: "chat", maxTokens: 1600, signal: jCtl.signal,
-        system: T.prompts.junior(S.cfg, c.action, firstName(JUNIOR.name)),
+        system: sys.estable + sys.variable, systemEstable: sys.estable.length,
         messages: msgs,
         onStatus: msg => {
           if (!reply.pending || S.view !== "chat" || J.current !== cid) return;
