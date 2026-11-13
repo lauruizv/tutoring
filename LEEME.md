@@ -4,7 +4,7 @@ Simulaciones por voz para evaluar habilidades blandas de candidatos y un mentor 
 
 ## Cómo levantarlo
 
-Requisito: Node.js 18 o superior (`node -v`). La app no necesita instalar paquetes.
+Requisito: Node.js 20 o superior (`node -v`). La primera vez, instalá las dependencias con `npm install`: las usan el proveedor Claude (Agent SDK) y la exportación de los informes a Excel y PDF.
 
 1. Conseguí una API key (ver abajo) y pegala en el archivo `.env`.
 2. En la carpeta del proyecto ejecutá:
@@ -167,7 +167,7 @@ Ninguna prueba usa la API real: todas hablan con la IA falsa de `test/fake-llm.m
 
 `npm test` cubre las rutas del servidor (config, empresa, informes, messages), la traducción del streaming de Gemini al formato de eventos de Claude, el mapeo de errores, path traversal, límites de tamaño, y la lógica de `core.js` (historial que se manda a la IA, parseo del JSON de evaluación, puntaje ponderado, corte de oraciones para la voz) y el caché de prompts (`test/prompts.test.mjs` y `test/cache.test.mjs`: el modelo recibe exactamente el mismo texto que antes).
 
-El recorrido en navegador necesita Playwright, que es **dependencia solo de desarrollo** (la app en producción sigue sin dependencias):
+El recorrido en navegador necesita Playwright, que es **dependencia solo de desarrollo** (la app en producción usa el Agent SDK de Claude y, para exportar los informes, `exceljs` y `pdfmake`):
 
 ```
 npm install

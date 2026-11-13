@@ -134,6 +134,7 @@ h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.01em}
 .filtros .field label{font-size:12.5px;font-weight:600;color:var(--muted)}
 .filtros .field input,.filtros .field select{height:38px;padding:7px 10px;font-size:13.5px}
 .filtros .btn-o{height:38px}
+.filtros .acciones{display:flex;gap:8px;margin-left:auto}
 .filtros .form-err{flex-basis:100%}
 .informes-lista .muted{margin:14px 0 0}
 .score-chip{font-weight:700;font-size:13px;padding:3px 9px;border-radius:99px;background:var(--lav-soft);color:var(--lav-ink);font-variant-numeric:tabular-nums}

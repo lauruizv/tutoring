@@ -10,6 +10,7 @@
    Si Playwright no está instalado, las pruebas se saltean con un aviso en vez de fallar. */
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { startApp, pedir, ingresarEn, salirEn, CLAVE_PRUEBA, configEjemplo, atenderEn, vozSimuladaEn, vozSimuladaDe, vozRealEn } from "./helpers.mjs";
 
 let chromium = null;
@@ -583,5 +584,50 @@ describe("filtros de los informes", { skip: saltear }, () => {
     await page.locator("#fHasta").fill(await dia(page, 4));
     await page.getByText("“Desde” no puede ser posterior a “Hasta”.").waitFor();
     await filas(page, 1);
+  });
+
+  test("la empresa baja a PDF y a Excel lo que tiene filtrado; el candidato no tiene esos botones", async () => {
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "empresa1");
+    await vista(page, "Informes de candidatos");
+    await filas(page, 3);
+    await page.locator("#fCandidato").fill("paz");
+    await filas(page, 1);
+
+    // Toca el botón y espera el archivo. El contenido de cada formato se prueba en test/exportar.test.mjs;
+    // acá, que el botón baje un archivo del formato pedido con lo que está en pantalla (1 informe).
+    // El tiempo de espera es largo porque en WSL la primera exportación a Excel tarda (ver CLAUDE.md).
+    const bajar = async formato => {
+      const [descarga] = await Promise.all([page.waitForEvent("download", { timeout: 180000 }), page.locator("#exportar-" + formato).click()]);
+      const archivo = { nombre: descarga.suggestedFilename(), contenido: fs.readFileSync(await descarga.path()) };
+      await page.waitForFunction(n => document.getElementById("toast").textContent === `Listo: 1 informe en ${n}.`, archivo.nombre, { timeout: 10000 });
+      return archivo;
+    };
+    const pdf = await bajar("pdf");
+    assert.match(pdf.nombre, /^informes-\d{4}-\d{2}-\d{2}\.pdf$/);
+    assert.equal(pdf.contenido.subarray(0, 5).toString(), "%PDF-");
+
+    const excel = await bajar("xlsx");
+    assert.match(excel.nombre, /^informes-\d{4}-\d{2}-\d{2}\.xlsx$/);
+    assert.equal(excel.contenido.subarray(0, 2).toString(), "PK", "un .xlsx es un archivo comprimido: empieza con PK");
+    assert.ok(excel.contenido.length > 2000);
+
+    // Al terminar, los botones vuelven a estar disponibles con su nombre.
+    assert.equal(await page.locator("#exportar-xlsx").isDisabled(), false);
+    assert.equal((await page.locator("#exportar-xlsx").innerText()).trim(), "Excel");
+
+    // Sin informes en pantalla no hay nada para bajar.
+    await page.locator("#fCandidato").fill("nadie se llama así");
+    await page.getByText("No hay informes con estos filtros.").waitFor();
+    assert.ok(await page.locator("#exportar-xlsx").isDisabled());
+    assert.ok(await page.locator("#exportar-pdf").isDisabled());
+
+    // El candidato filtra sus informes, pero no los exporta.
+    const candidato = await nuevaPagina();
+    await ingresarEn(candidato, app.base, "estudiante1");
+    await candidato.locator('.nav button:has-text("Mis informes")').click();
+    await vista(candidato, "Mis informes");
+    await filas(candidato, 2);
+    assert.equal(await candidato.locator("#exportar-xlsx, #exportar-pdf").count(), 0);
   });
 });

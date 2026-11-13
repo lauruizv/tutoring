@@ -1,10 +1,11 @@
-// Tutoring: servidor mínimo (Node 18+).
+// Tutoring: servidor mínimo (Node 20+).
 // - Sirve la app de /public (src/shared/http/static.js)
 // - Reenvía las consultas al proveedor de IA (Claude vía Agent SDK, Gemini o Claude API).
 //   Las keys viven en .env y nunca llegan al navegador.
 // - Si el proveedor principal falla antes de empezar a responder, reintenta y pasa al de respaldo.
 // - Guarda la configuración de la empresa y los informes en /data
-// Única dependencia: @anthropic-ai/claude-agent-sdk (solo para LLM_PROVIDER=claude-sdk).
+// Dependencias: @anthropic-ai/claude-agent-sdk (solo para LLM_PROVIDER=claude-sdk) y, para exportar los informes,
+// exceljs y pdfmake (se cargan recién cuando alguien exporta; ver src/modules/simulaciones/exportar/).
 // Estructura: src/config (entorno), src/shared (IA, HTTP, utilidades), src/modules (auth, ia, empresa,
 // simulaciones, mentor) y src/routes.js (orden de chequeos de la API). Ver docs/superpowers/specs/2026-10-28-backend-por-capas-design.md.
 const http = require("http");

@@ -33,6 +33,31 @@ async function opciones(req, res, { yo, url }) {
   return json(res, 200, await service.opciones(yo, filtro));
 }
 
+// GET /api/informes/exportar?formato=xlsx|pdf&zona=<zona horaria>, más los filtros de la lista. Solo la empresa.
+async function exportar(req, res, { yo, url }) {
+  if (req.method !== "GET") return fail(res, 405, "Método no permitido");
+  if (!exigir(res, yo, ["empresa"])) return;
+  const filtro = filtroDelPedido(res, url);
+  if (!filtro) return;
+  let archivo;
+  try {
+    archivo = await service.exportar(yo, filtro, { formato: url.searchParams.get("formato"), zona: url.searchParams.get("zona") });
+  } catch (e) {
+    if (e.code === "exportacion_invalida") return fail(res, 400, e.message);
+    // exceljs y pdfmake se cargan recién al exportar: si no están instaladas, se dice cómo arreglarlo.
+    if (e.code === "MODULE_NOT_FOUND") return fail(res, 500, "Para exportar hace falta instalar las dependencias: corré npm install en la carpeta del proyecto y reiniciá el servidor.");
+    throw e;
+  }
+  res.writeHead(200, {
+    "content-type": archivo.tipoMime,
+    "content-length": archivo.contenido.length,
+    "content-disposition": `attachment; filename="${archivo.nombre}"`,
+    "x-informes": String(archivo.cantidad),   // cuántos informes lleva el archivo, para avisarle a quien exporta
+    "cache-control": "no-store"
+  });
+  return res.end(archivo.contenido);
+}
+
 // POST /api/informes
 async function crear(req, res, { yo }) {
   const r = await bodyObject(req, res, LIMITS.informe, "");
@@ -57,4 +82,4 @@ async function porId(req, res, { yo, params }) {
   return fail(res, 405, "Método no permitido");
 }
 
-module.exports = { listar, opciones, crear, porId, filtroDelPedido };
+module.exports = { listar, opciones, exportar, crear, porId, filtroDelPedido };

@@ -8,7 +8,9 @@ T.api = (function () {
   const sinIngreso = (status, type) => status === 401 && type === "sin_ingreso";
   function avisarSinSesion() { if (onSinSesion) onSinSesion(); }
 
-  async function jsonReq(url, opts = {}) {
+  // Pedido al servidor con los errores de siempre: sin conexión, o una respuesta de error con su mensaje.
+  // Si salió bien devuelve la respuesta, y quien llama decide cómo leerla (JSON o un archivo).
+  async function pedido(url, opts = {}) {
     let res;
     try {
       res = await fetch(url, { headers: { "content-type": "application/json" }, ...opts });
@@ -16,18 +18,33 @@ T.api = (function () {
       const err = new Error("No se pudo conectar con el servidor. ¿Sigue corriendo npm start?");
       err.offline = true; throw err;
     }
+    if (res.ok) return res;
     let cuerpo = null;
     try { cuerpo = await res.json(); } catch (_) {}
-    if (!res.ok) {
-      const msg = (cuerpo && cuerpo.error && cuerpo.error.message) || "HTTP " + res.status;
-      const e = new Error(msg);
-      e.status = res.status;
-      e.type = (cuerpo && cuerpo.error && cuerpo.error.type) || "";
-      // /api/yo es la pregunta del arranque: ahí el 401 es lo normal, no "tu sesión venció".
-      if (sinIngreso(e.status, e.type) && url !== "/api/yo") avisarSinSesion();
-      throw e;
-    }
-    return cuerpo;
+    const msg = (cuerpo && cuerpo.error && cuerpo.error.message) || "HTTP " + res.status;
+    const e = new Error(msg);
+    e.status = res.status;
+    e.type = (cuerpo && cuerpo.error && cuerpo.error.type) || "";
+    // /api/yo es la pregunta del arranque: ahí el 401 es lo normal, no "tu sesión venció".
+    if (sinIngreso(e.status, e.type) && url !== "/api/yo") avisarSinSesion();
+    throw e;
+  }
+
+  async function jsonReq(url, opts) {
+    const res = await pedido(url, opts);
+    try { return await res.json(); } catch (_) { return null; }
+  }
+
+  // Baja un archivo que genera el servidor. Devuelve { blob, nombre, cantidad (de informes que lleva) }.
+  async function descargar(url) {
+    const res = await pedido(url);
+    const nombre = (/filename="([^"]+)"/.exec(res.headers.get("content-disposition") || "") || [])[1] || "descarga";
+    return { blob: await res.blob(), nombre, cantidad: Number(res.headers.get("x-informes")) || 0 };
+  }
+
+  // La zona horaria de este navegador ("America/Argentina/Buenos_Aires"): los archivos exportados llevan las fechas en esa hora.
+  function zonaHoraria() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (_) { return ""; }
   }
 
   // "?a=1&b=2" a partir de un objeto, salteando lo vacío ("" si no queda nada).
@@ -159,6 +176,8 @@ T.api = (function () {
       list: filtro => jsonReq("/api/informes" + consulta(filtro)),
       // Candidatos y simulaciones que existen, para los desplegables de los filtros.
       opciones: filtro => jsonReq("/api/informes/opciones" + consulta(filtro)),
+      // Baja el listado filtrado como archivo. formato: "xlsx" | "pdf". Solo la empresa.
+      exportar: (formato, filtro) => descargar("/api/informes/exportar" + consulta(Object.assign({ formato, zona: zonaHoraria() }, filtro))),
       get: id => jsonReq("/api/informes/" + encodeURIComponent(id)),
       save: data => jsonReq("/api/informes", { method: "POST", body: JSON.stringify(data) }),
       remove: id => jsonReq("/api/informes/" + encodeURIComponent(id), { method: "DELETE" })

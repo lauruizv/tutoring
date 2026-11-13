@@ -133,6 +133,53 @@ describe("servidor con Gemini", () => {
     for (const id of [a, b, c]) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
   });
 
+  test("informes: exportar baja como archivo el listado con los mismos filtros que la lista", async () => {
+    const lucas = await app.ingresar("estudiante1"), otro = await app.ingresar("estudiante2");
+    const crear = async (cookie, extra) => (await pedir(app.base, "/api/informes", { method: "POST", cookie, json: { ...INFORME, ...extra } })).cuerpo.id;
+    const cobranza = { titulo: "Llamada de cobranza", resumen: "r", cliente: "Diego Sosa", objetivo: "o" };
+    const ids = [
+      await crear(lucas, { fecha: "2026-11-10T15:00:00.000Z" }),
+      await crear(lucas, { fecha: "2026-11-05T12:00:00.000Z", escenario: cobranza }),
+      await crear(otro, { fecha: "2026-11-08T12:00:00.000Z", escenario: cobranza })
+    ];
+    // Se prueba con PDF. El contenido del Excel y del PDF se prueba en test/exportar.test.mjs.
+    const exportar = consulta => pedir(app.base, "/api/informes/exportar?" + new URLSearchParams({ formato: "pdf", ...consulta }));
+
+    const todo = await exportar({});
+    assert.equal(todo.status, 200);
+    assert.equal(todo.headers.get("content-type"), "application/pdf");
+    assert.match(todo.headers.get("content-disposition"), /^attachment; filename="informes-\d{4}-\d{2}-\d{2}\.pdf"$/);
+    assert.equal(todo.headers.get("cache-control"), "no-store");
+    assert.equal(todo.headers.get("x-informes"), "3");
+    assert.ok(todo.texto.startsWith("%PDF-"), "es un PDF");
+
+    // Los mismos filtros que la lista: lleva los mismos informes.
+    for (const consulta of [{ candidato: "ferreyra" }, { escenario: "Llamada de cobranza" }, { desde: "2026-11-06T00:00:00.000Z", hasta: "2026-11-09T00:00:00.000Z" }, { candidato: "no existe nadie así" }]) {
+      const lista = (await pedir(app.base, "/api/informes?" + new URLSearchParams(consulta))).cuerpo;
+      const archivo = await exportar(consulta);
+      assert.equal(archivo.status, 200, JSON.stringify(consulta));
+      assert.equal(archivo.headers.get("x-informes"), String(lista.length), JSON.stringify(consulta));
+    }
+    assert.equal((await exportar({ candidato: "ferreyra" })).headers.get("x-informes"), "2");
+    assert.equal((await exportar({ zona: "Marte/Olympus" })).status, 200, "una zona horaria que no existe no rompe la exportación");
+
+    for (const id of ids) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
+  });
+
+  test("informes: exportar rechaza con el motivo un formato desconocido, una fecha inválida y otros métodos", async () => {
+    for (const formato of ["csv", "", "XLSX", "constructor"]) {
+      const r = await pedir(app.base, "/api/informes/exportar?formato=" + formato);
+      assert.equal(r.status, 400, formato);
+      assert.match(r.cuerpo.error.message, /xlsx, pdf/, formato);
+    }
+    const sinFormato = await pedir(app.base, "/api/informes/exportar");
+    assert.equal(sinFormato.status, 400);
+    const fecha = await pedir(app.base, "/api/informes/exportar?formato=pdf&desde=ayer");
+    assert.equal(fecha.status, 400);
+    assert.match(fecha.cuerpo.error.message, /desde/);
+    assert.equal((await pedir(app.base, "/api/informes/exportar?formato=pdf", { method: "POST", json: {} })).status, 405);
+  });
+
   test("informes: una fecha que no se entiende o un rango al revés responden 400 con el motivo", async () => {
     for (const ruta of ["/api/informes", "/api/informes/opciones"]) {
       const r = await pedir(app.base, ruta + "?desde=ayer");

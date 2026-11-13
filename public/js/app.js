@@ -265,7 +265,8 @@
   // Listas de informes con filtros ("Mis informes" del candidato e "Informes" de la empresa)
   // ------------------------------------------------------------------
   // Barra de filtros. No le pide nada al servidor: deja lo elegido en `valores` y avisa con alCambiar().
-  function barraFiltros({ valores, conCandidato, alCambiar }) {
+  // `acciones` son botones que van al final de la barra (los de exportar); la barra no sabe qué hacen.
+  function barraFiltros({ valores, conCandidato, alCambiar, acciones = [] }) {
     const desde = h("input", { type: "date", id: "fDesde", value: valores.desde });
     const hasta = h("input", { type: "date", id: "fHasta", value: valores.hasta });
     const escenario = h("select", { id: "fEscenario" });
@@ -307,24 +308,62 @@
 
     const el = h("div", { class: "filtros", role: "search", "aria-label": "Filtrar informes" },
       field("Desde", "", desde), field("Hasta", "", hasta), field("Simulación", "", escenario),
-      candidato ? field("Candidato", "", candidato) : null, nombres, limpiar, aviso);
+      candidato ? field("Candidato", "", candidato) : null, nombres, limpiar,
+      acciones.length ? h("div", { class: "acciones" }, ...acciones) : null, aviso);
     return { el, ponerOpciones, cerrar: () => clearTimeout(espera) };
+  }
+
+  // Le entrega al navegador un archivo ya bajado, para que lo guarde con ese nombre.
+  function guardarArchivo(blob, nombre) {
+    const url = URL.createObjectURL(blob);
+    const enlace = h("a", { href: url, download: nombre, hidden: true });
+    document.body.append(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // Lista de informes con su barra de filtros. Devuelve los elementos para agregar a la vista.
   //   clave        dónde quedan los filtros elegidos (S.filtros[clave]): siguen puestos al volver de un informe.
   //   fijo         filtro que la persona no elige (la empresa cargada).
   //   conCandidato muestra el filtro por candidato y el nombre en cada fila (solo la empresa).
+  //   exportable   agrega los botones para bajar el listado a Excel y PDF (solo la empresa).
   //   sinNada      texto cuando no hay ningún informe y no hay filtros puestos.
-  function listaDeInformes({ clave, fijo, conCandidato, sinNada }) {
+  function listaDeInformes({ clave, fijo, conCandidato, exportable, sinNada }) {
     const valores = S.filtros[clave];
     const lista = h("div", { class: "informes-lista", "aria-live": "polite" });
-    const barra = barraFiltros({ valores, conCandidato, alCambiar: buscar });
+    // Se exporta lo que está en pantalla: la búsqueda de la lista que se ve (`mostrado`), no lo que se está tipeando.
+    let mostrado = null, exportando = false;
+    const botones = !exportable ? [] : [["xlsx", "Excel"], ["pdf", "PDF"]].map(([formato, nombre]) => {
+      return h("button", { class: "btn-o", type: "button", id: "exportar-" + formato, title: `Bajar esta lista en ${nombre}`, disabled: true,
+        onclick: () => exportar(formato, nombre) }, icon("download"), nombre);
+    });
+    const habilitarBotones = () => botones.forEach(b => { b.disabled = exportando || !mostrado || !mostrado.cantidad; });
+    async function exportar(formato, nombre) {
+      if (exportando || !mostrado) return;
+      // Mientras se genera no se puede pedir otro. El aviso queda hasta que lo reemplaza el del resultado
+      // (el texto del botón no cambia: al ser más largo movía de lugar toda la barra).
+      exportando = true; habilitarBotones();
+      toast(`Generando el ${nombre}…`, 120000);
+      try {
+        const archivo = await T.api.informes.exportar(formato, mostrado.filtro);
+        guardarArchivo(archivo.blob, archivo.nombre);
+        toast(`Listo: ${archivo.cantidad === 1 ? "1 informe" : archivo.cantidad + " informes"} en ${archivo.nombre}.`, 4000);
+      } catch (err) {
+        toast("No se pudo exportar: " + T.api.errorCopy(err), 5000);
+      } finally {
+        exportando = false; habilitarBotones();
+      }
+    }
+
+    const barra = barraFiltros({ valores, conCandidato, alCambiar: buscar, acciones: botones });
     barra.el.hidden = true;
     let pedido = 0, pintada = false;
 
-    function pintar(items) {
+    function pintar(items, filtro) {
       pintada = true;
+      mostrado = { filtro, cantidad: items.length };
+      habilitarBotones();
       // Sin informes y sin filtros no hay nada que filtrar: queda solo el mensaje.
       barra.el.hidden = !items.length && !hayFiltros(valores);
       lista.replaceChildren(items.length ? reportList(items, conCandidato)
@@ -336,13 +375,13 @@
       const huella = JSON.stringify([S.usuario.id, filtro]);
       // Si ya está guardada la lista de esta misma búsqueda (por ejemplo, al volver de un informe),
       // se muestra al instante y se actualiza por detrás. Si es otra búsqueda, queda la anterior hasta que llegue.
-      if (S.listaInformes.huella === huella) pintar(S.listaInformes.items);
+      if (S.listaInformes.huella === huella) pintar(S.listaInformes.items, filtro);
       else if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "Cargando…" }));
       try {
         const items = await T.api.informes.list(filtro);
         if (mio !== pedido) return;   // llegó tarde: ya se pidió una búsqueda más nueva
         S.listaInformes = { huella, items };
-        if (lista.isConnected) pintar(items);
+        if (lista.isConnected) pintar(items, filtro);
       } catch (err) {
         if (mio !== pedido || !lista.isConnected) return;
         if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "No se pudieron cargar los informes." }));
@@ -1368,7 +1407,7 @@
     const col = h("div", { class: "wide cfg" });
     col.append(h("div", { class: "cfg-head" }, h("div", null, h("h1", { text: "Informes de candidatos" }), h("p", { text: "Resultados de las simulaciones. La decisión siempre la toma una persona." }))));
     // Solo los informes de la empresa cargada: ese filtro lo aplica el servidor, junto con los que elige la persona.
-    col.append(...listaDeInformes({ clave: "informes", fijo: { empresa: S.cfg.empresa }, conCandidato: true,
+    col.append(...listaDeInformes({ clave: "informes", fijo: { empresa: S.cfg.empresa }, conCandidato: true, exportable: true,
       sinNada: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
     view.append(col);
   };

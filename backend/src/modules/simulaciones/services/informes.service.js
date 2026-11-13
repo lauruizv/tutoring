@@ -3,6 +3,7 @@
 const crypto = require("crypto");
 const { isObj } = require("../../../shared/utils/validacion");
 const repo = require("../repositories/informes.repository");
+const { exportarInformes } = require("../exportar");
 
 // La empresa ve todos los informes; estudiante y junior, solo los suyos.
 // `loVe` decide sobre un informe; `alcanceDe` dice lo mismo para una lista (ver el repositorio).
@@ -14,6 +15,15 @@ const listar = (yo, filtro) => repo.listarResumenes(filtro, alcanceDe(yo));
 
 // Candidatos y simulaciones que existen, para los desplegables de los filtros.
 const opciones = (yo, filtro) => repo.listarOpciones(alcanceDe(yo), filtro);
+
+// El listado filtrado como archivo (Excel o PDF). El exportador no sabe de dónde salen los informes:
+// recibe una función que se los trae, ya con el filtro y el alcance de quien exporta.
+// Devuelve { nombre, tipoMime, contenido, cantidad }; si el formato o la zona no valen, tira un error
+// con code "exportacion_invalida".
+const exportar = (yo, filtro, { formato, zona }) => exportarInformes({
+  formato, zona, filtro,
+  obtenerResumenes: () => repo.listarResumenes(filtro, alcanceDe(yo))
+});
 
 // Devuelve { error: { status, message } } o { id }.
 async function crear(r, yo) {
@@ -37,4 +47,4 @@ async function obtener(id, yo, sinPermiso) {
 
 const borrar = id => repo.borrar(id);
 
-module.exports = { listar, opciones, crear, obtener, borrar };
+module.exports = { listar, opciones, exportar, crear, obtener, borrar };

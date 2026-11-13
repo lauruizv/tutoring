@@ -16,7 +16,7 @@ describe("login y sesión", () => {
   after(async () => { await app.stop(); });
 
   test("sin sesión, la API responde 401 con el mensaje en español", async () => {
-    for (const [ruta, method] of [["/api/config", "GET"], ["/api/empresa", "GET"], ["/api/informes", "GET"], ["/api/informes/opciones", "GET"], ["/api/yo", "GET"], ["/api/voz/token", "POST"], ["/api/diagnostico", "GET"]]) {
+    for (const [ruta, method] of [["/api/config", "GET"], ["/api/empresa", "GET"], ["/api/informes", "GET"], ["/api/informes/opciones", "GET"], ["/api/informes/exportar?formato=pdf", "GET"], ["/api/yo", "GET"], ["/api/voz/token", "POST"], ["/api/diagnostico", "GET"]]) {
       const r = await pedir(app.base, ruta, { method, cookie: null });
       assert.equal(r.status, 401, ruta);
       assert.equal(r.cuerpo.error.message, SIN_SESION, ruta);
@@ -134,9 +134,15 @@ describe("permisos por rol", () => {
   });
   after(async () => { await app.stop(); });
 
-  test("estudiante y junior no pueden diagnosticar, guardar la configuración ni borrar informes", async () => {
+  test("estudiante y junior no pueden diagnosticar, guardar la configuración, borrar informes ni exportarlos", async () => {
     for (const c of [est1, jun]) {
       assert.equal((await pedir(app.base, "/api/diagnostico", { cookie: c })).status, 403);
+      // Ni siquiera los propios: exportar el listado es de la empresa. Y el permiso se revisa antes que el formato.
+      for (const formato of ["pdf", "xlsx", "cualquiera"]) {
+        const exp = await pedir(app.base, "/api/informes/exportar?formato=" + formato, { cookie: c });
+        assert.equal(exp.status, 403, formato);
+        assert.equal(exp.cuerpo.error.message, "No tenés permiso para hacer esto.");
+      }
       const put = await pedir(app.base, "/api/empresa", { method: "PUT", json: { empresa: "X" }, cookie: c });
       assert.equal(put.status, 403);
       assert.equal(put.cuerpo.error.message, "No tenés permiso para hacer esto.");
