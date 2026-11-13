@@ -128,6 +128,14 @@ h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.01em}
 .list button:hover{background:var(--soft)}
 .list .t{font-weight:500}
 .list .d{font-size:12.5px;color:var(--muted)}
+/* Filtros de las listas de informes: una fila que baja de línea sola cuando no entra. */
+.filtros{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:flex-end;margin-top:12px}
+.filtros .field{flex:1 1 140px;min-width:0;gap:4px}
+.filtros .field label{font-size:12.5px;font-weight:600;color:var(--muted)}
+.filtros .field input,.filtros .field select{height:38px;padding:7px 10px;font-size:13.5px}
+.filtros .btn-o{height:38px}
+.filtros .form-err{flex-basis:100%}
+.informes-lista .muted{margin:14px 0 0}
 .score-chip{font-weight:700;font-size:13px;padding:3px 9px;border-radius:99px;background:var(--lav-soft);color:var(--lav-ink);font-variant-numeric:tabular-nums}
 .section-title{display:flex;justify-content:space-between;align-items:baseline;margin-top:34px}
 .section-title h2{font-size:16px;font-weight:600}

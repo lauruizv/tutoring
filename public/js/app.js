@@ -84,6 +84,9 @@
     down: '<path d="M5 8l5 5 5-5"/>'
   };
   const icon = k => svg(ICON[k]);
+  // Filtros de las listas de informes: los días como los da el campo de fecha ("2026-11-10") y los textos tal cual.
+  const filtrosVacios = () => ({ desde: "", hasta: "", escenario: "", candidato: "" });
+  const hayFiltros = v => Object.values(v).some(Boolean);
 
   // ------------------------------------------------------------------
   // Estado
@@ -97,7 +100,9 @@
     usuario: null,      // /api/yo: { id, usuario, nombre, rol, debeCambiar }
     candidato: "",      // el nombre sale de la sesión
     voiceName: "",
-    informes: [],
+    informes: [],       // todos los informes del candidato, sin filtros (los últimos se ven en el inicio)
+    filtros: { misinformes: filtrosVacios(), informes: filtrosVacios() },   // lo elegido en cada lista de informes
+    listaInformes: { huella: null, items: [] },   // última lista filtrada que devolvió el servidor, y para qué búsqueda
     dirty: false,
     engine: null,
     timer: null,
@@ -256,11 +261,104 @@
     return list;
   }
 
+  // ------------------------------------------------------------------
+  // Listas de informes con filtros ("Mis informes" del candidato e "Informes" de la empresa)
+  // ------------------------------------------------------------------
+  // Barra de filtros. No le pide nada al servidor: deja lo elegido en `valores` y avisa con alCambiar().
+  function barraFiltros({ valores, conCandidato, alCambiar }) {
+    const desde = h("input", { type: "date", id: "fDesde", value: valores.desde });
+    const hasta = h("input", { type: "date", id: "fHasta", value: valores.hasta });
+    const escenario = h("select", { id: "fEscenario" });
+    const candidato = conCandidato ? h("input", { type: "search", id: "fCandidato", list: "fCandidatos", placeholder: "Todos", autocomplete: "off", value: valores.candidato }) : null;
+    const nombres = conCandidato ? h("datalist", { id: "fCandidatos" }) : null;
+    const limpiar = h("button", { class: "btn-o", type: "button", id: "fLimpiar", text: "Limpiar", disabled: !hayFiltros(valores) });
+    const aviso = errorForm("");
+    let espera = null;
+
+    // Las opciones llegan del servidor después de dibujar. La simulación elegida se mantiene aunque ya no esté en la lista.
+    function ponerOpciones(op) {
+      const titulos = [...new Set([...(op.escenarios || []), valores.escenario].filter(Boolean))];
+      escenario.replaceChildren(h("option", { value: "", text: "Todas" }), ...titulos.map(t => h("option", { value: t, text: t })));
+      escenario.value = valores.escenario;
+      if (nombres) nombres.replaceChildren(...(op.candidatos || []).map(n => h("option", { value: n })));
+    }
+    function cambio() {
+      const alReves = Boolean(valores.desde && valores.hasta && valores.desde > valores.hasta);
+      aviso.textContent = alReves ? "“Desde” no puede ser posterior a “Hasta”." : "";
+      aviso.hidden = !alReves;
+      limpiar.disabled = !hayFiltros(valores);
+      if (!alReves) alCambiar();
+    }
+    desde.addEventListener("change", () => { valores.desde = desde.value; cambio(); });
+    hasta.addEventListener("change", () => { valores.hasta = hasta.value; cambio(); });
+    escenario.addEventListener("change", () => { valores.escenario = escenario.value; cambio(); });
+    // Al escribir el nombre se espera a que la persona deje de tipear, para no pedir la lista con cada letra.
+    if (candidato) candidato.addEventListener("input", () => {
+      valores.candidato = candidato.value.trim();
+      clearTimeout(espera); espera = setTimeout(cambio, 300);
+    });
+    limpiar.addEventListener("click", () => {
+      Object.assign(valores, filtrosVacios());
+      desde.value = hasta.value = escenario.value = "";
+      if (candidato) candidato.value = "";
+      clearTimeout(espera); cambio();
+    });
+    ponerOpciones({});
+
+    const el = h("div", { class: "filtros", role: "search", "aria-label": "Filtrar informes" },
+      field("Desde", "", desde), field("Hasta", "", hasta), field("Simulación", "", escenario),
+      candidato ? field("Candidato", "", candidato) : null, nombres, limpiar, aviso);
+    return { el, ponerOpciones, cerrar: () => clearTimeout(espera) };
+  }
+
+  // Lista de informes con su barra de filtros. Devuelve los elementos para agregar a la vista.
+  //   clave        dónde quedan los filtros elegidos (S.filtros[clave]): siguen puestos al volver de un informe.
+  //   fijo         filtro que la persona no elige (la empresa cargada).
+  //   conCandidato muestra el filtro por candidato y el nombre en cada fila (solo la empresa).
+  //   sinNada      texto cuando no hay ningún informe y no hay filtros puestos.
+  function listaDeInformes({ clave, fijo, conCandidato, sinNada }) {
+    const valores = S.filtros[clave];
+    const lista = h("div", { class: "informes-lista", "aria-live": "polite" });
+    const barra = barraFiltros({ valores, conCandidato, alCambiar: buscar });
+    barra.el.hidden = true;
+    let pedido = 0, pintada = false;
+
+    function pintar(items) {
+      pintada = true;
+      // Sin informes y sin filtros no hay nada que filtrar: queda solo el mensaje.
+      barra.el.hidden = !items.length && !hayFiltros(valores);
+      lista.replaceChildren(items.length ? reportList(items, conCandidato)
+        : h("p", { class: "muted", text: hayFiltros(valores) ? "No hay informes con estos filtros." : sinNada }));
+    }
+    async function buscar() {
+      const mio = ++pedido;
+      const filtro = Object.assign(T.core.rangoDeDias(valores.desde, valores.hasta), { candidato: valores.candidato, escenario: valores.escenario }, fijo);
+      const huella = JSON.stringify([S.usuario.id, filtro]);
+      // Si ya está guardada la lista de esta misma búsqueda (por ejemplo, al volver de un informe),
+      // se muestra al instante y se actualiza por detrás. Si es otra búsqueda, queda la anterior hasta que llegue.
+      if (S.listaInformes.huella === huella) pintar(S.listaInformes.items);
+      else if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "Cargando…" }));
+      try {
+        const items = await T.api.informes.list(filtro);
+        if (mio !== pedido) return;   // llegó tarde: ya se pidió una búsqueda más nueva
+        S.listaInformes = { huella, items };
+        if (lista.isConnected) pintar(items);
+      } catch (err) {
+        if (mio !== pedido || !lista.isConnected) return;
+        if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "No se pudieron cargar los informes." }));
+        toast("No se pudieron actualizar los informes: " + T.api.errorCopy(err));
+      }
+    }
+    buscar();
+    T.api.informes.opciones(fijo).then(op => { if (lista.isConnected) barra.ponerOpciones(op); }).catch(() => {});
+    S.alSalirDeVista = barra.cerrar;
+    return [barra.el, lista];
+  }
+
   VIEWS.misinformes = view => {
     const col = h("div", { class: "col", style: "padding-top:20px" });
-    col.append(h("h1", { text: "Mis informes", style: "font-size:24px;font-weight:600" }));
-    const mine = S.informes.filter(r => r.candidato === S.candidato);
-    col.append(mine.length ? reportList(mine) : h("p", { class: "muted", text: "Todavía no hiciste ninguna simulación." }));
+    col.append(h("h1", { text: "Mis informes", style: "font-size:24px;font-weight:600" }),
+      ...listaDeInformes({ clave: "misinformes", conCandidato: false, sinNada: "Todavía no hiciste ninguna simulación." }));
     view.append(col);
   };
 
@@ -782,6 +880,7 @@
       }
       const resumen = { id: report.id, candidato: report.candidato, escenario: report.escenario.titulo, empresa: report.empresa, fecha: report.fecha, puntaje: report.puntaje };
       S.informes = [resumen, ...S.informes.filter(r => r.id !== report.id)];
+      S.listaInformes.huella = null;   // hay un informe nuevo: la lista filtrada se vuelve a pedir
       S.report = report; S.lastCall = null;
       if (!vigente()) { toast("El informe quedó listo en “Mis informes”."); return; }
       go("report", { id: report.id });
@@ -826,7 +925,10 @@
     if (S.profile === "empresa" && r.id) actions.append(h("button", { class: "btn-o btn-danger", onclick: async () => {
       if (!confirm("¿Eliminar este informe?")) return;
       try { await T.api.informes.remove(r.id); } catch (err) { return toast("No se pudo eliminar: " + T.api.errorCopy(err)); }
-      S.informes = await T.api.informes.list().catch(() => S.informes); go("informes"); toast("Informe eliminado.");
+      // Se saca de lo guardado para que no aparezca al volver; la lista se actualiza sola al abrirse.
+      S.informes = S.informes.filter(x => x.id !== r.id);
+      S.listaInformes.items = S.listaInformes.items.filter(x => x.id !== r.id);
+      go("informes"); toast("Informe eliminado.");
     } }, icon("trash"), "Eliminar"));
     col.append(actions);
 
@@ -1265,19 +1367,10 @@
   VIEWS.informes = view => {
     const col = h("div", { class: "wide cfg" });
     col.append(h("div", { class: "cfg-head" }, h("div", null, h("h1", { text: "Informes de candidatos" }), h("p", { text: "Resultados de las simulaciones. La decisión siempre la toma una persona." }))));
-    const lista = h("div");
-    const mostrar = () => {
-      const deEsta = S.informes.filter(r => !r.empresa || r.empresa === S.cfg.empresa);
-      lista.replaceChildren(deEsta.length ? reportList(deEsta, true) : h("p", { class: "muted", text: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
-    };
-    mostrar();
-    col.append(lista);
+    // Solo los informes de la empresa cargada: ese filtro lo aplica el servidor, junto con los que elige la persona.
+    col.append(...listaDeInformes({ clave: "informes", fijo: { empresa: S.cfg.empresa }, conCandidato: true,
+      sinNada: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
     view.append(col);
-    T.api.informes.list().then(informes => {
-      if (!lista.isConnected) return;
-      S.informes = informes;
-      mostrar();
-    }).catch(err => { if (lista.isConnected) toast("No se pudieron actualizar los informes: " + T.api.errorCopy(err)); });
   };
 
   // ------------------------------------------------------------------
@@ -1408,6 +1501,13 @@
   }
 
   // Con la sesión ya abierta: datos del usuario, configuración, informes y su pantalla de inicio.
+  // Al entrar o salir de una cuenta no queda nada de los informes ni de los filtros de la persona anterior.
+  function olvidarInformes() {
+    S.informes = [];
+    S.filtros = { misinformes: filtrosVacios(), informes: filtrosVacios() };
+    S.listaInformes = { huella: null, items: [] };
+  }
+
   async function entrar() {
     S.usuario = await T.api.auth.yo();
     if (S.usuario.debeCambiar) return go("nuevaClave");
@@ -1417,6 +1517,7 @@
     S.audio = Object.assign({ entrada: "", salida: "" }, store.get(k("audio"), {}));
     J = store.get(k("junior"), { chats: [], current: null });
     S.report = null; S.dirty = false;
+    olvidarInformes();
     let errorConfig = null;
     try { S.server = await T.api.config(); }
     catch (e) { errorConfig = e; S.server = { hasKey: false, models: {}, ia: {}, voice: { provider: "browser" } }; }
@@ -1430,7 +1531,9 @@
     S.cfg = T.core.migrarConfig(S.cfg) || T.core.normalizarConfig(clone(T.DEFAULTS));
     if (!S.cfg.empresa) S.cfg.empresa = T.DEFAULTS.empresa;
     completarDesdeEjemplos(S.cfg);
-    try { S.informes = await T.api.informes.list(); } catch (_) { S.informes = []; }
+    // Los últimos informes se ven en el inicio del candidato. Los otros perfiles no los usan ahí:
+    // la empresa pide su lista (con filtros) al abrir Informes.
+    if (S.profile === "estudiante") { try { S.informes = await T.api.informes.list(); } catch (_) {} }
     go(INICIO[S.profile] || "sims");
     if (errorConfig) toast(T.api.errorCopy(errorConfig));
   }
@@ -1438,7 +1541,8 @@
   async function salir() {
     if (S.dirty && !confirm("Hay cambios sin guardar en la configuración. ¿Salir igual?")) return;
     try { await T.api.auth.salir(); } catch (_) {}
-    S.usuario = null; S.cfg = null; S.report = null; S.informes = []; S.dirty = false;
+    S.usuario = null; S.cfg = null; S.report = null; S.dirty = false;
+    olvidarInformes();
     J = { chats: [], current: null };
     go("login");
   }

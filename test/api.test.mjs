@@ -75,7 +75,7 @@ describe("servidor con Gemini", () => {
     const lista = await pedir(app.base, "/api/informes");
     assert.equal(lista.status, 200);
     const fila = lista.cuerpo.find(r => r.id === id);
-    assert.deepEqual(fila, { id, candidato: "Lucas Ferreyra", empresa: INFORME.empresa, escenario: "Recordatorios duplicados", fecha: INFORME.fecha, puntaje: 78 });
+    assert.deepEqual(fila, { id, candidato: "Lucas Ferreyra", empresa: INFORME.empresa, escenario: "Recordatorios duplicados", fecha: INFORME.fecha, puntaje: 78, duracionSeg: 240 });
 
     const uno = await pedir(app.base, `/api/informes/${id}`);
     assert.equal(uno.status, 200);
@@ -95,6 +95,53 @@ describe("servidor con Gemini", () => {
     const fechas = lista.map(r => r.fecha);
     assert.deepEqual(fechas, [...fechas].sort().reverse());
     for (const id of ids) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
+  });
+
+  test("informes: la lista se filtra por fechas, candidato, simulación y empresa", async () => {
+    const lucas = await app.ingresar("estudiante1"), otro = await app.ingresar("estudiante2");
+    const crear = async (cookie, extra) => (await pedir(app.base, "/api/informes", { method: "POST", cookie, json: { ...INFORME, ...extra } })).cuerpo.id;
+    const cobranza = { titulo: "Llamada de cobranza", resumen: "r", cliente: "Diego Sosa", objetivo: "o" };
+    const a = await crear(lucas, { fecha: "2026-11-10T15:00:00.000Z" });
+    const b = await crear(lucas, { fecha: "2026-11-05T12:00:00.000Z", escenario: cobranza });
+    const c = await crear(otro, { fecha: "2026-11-08T12:00:00.000Z", escenario: cobranza, empresa: "MKT Contact Center" });
+    const nombreDelOtro = (await pedir(app.base, "/api/informes/" + c)).cuerpo.candidato;
+    const ids = async consulta => {
+      const r = await pedir(app.base, "/api/informes?" + new URLSearchParams(consulta));
+      assert.equal(r.status, 200, JSON.stringify(consulta));
+      return r.cuerpo.map(x => x.id);
+    };
+
+    assert.deepEqual(await ids({}), [a, c, b], "sin filtros, todos, del más nuevo al más viejo");
+    assert.deepEqual(await ids({ desde: "2026-11-06T00:00:00.000Z" }), [a, c]);
+    assert.deepEqual(await ids({ desde: "2026-11-06T00:00:00.000Z", hasta: "2026-11-09T00:00:00.000Z" }), [c]);
+    assert.deepEqual(await ids({ candidato: "FERREYRA" }), [a, b], "sin importar mayúsculas");
+    assert.deepEqual(await ids({ candidato: nombreDelOtro }), [c]);
+    assert.deepEqual(await ids({ escenario: "Llamada de cobranza" }), [c, b]);
+    assert.deepEqual(await ids({ escenario: "Llamada de cobranza", candidato: "ferreyra" }), [b], "los filtros se suman");
+    assert.deepEqual(await ids({ empresa: "MKT Contact Center" }), [c]);
+    assert.deepEqual(await ids({ candidato: "no existe nadie así" }), []);
+
+    const opciones = await pedir(app.base, "/api/informes/opciones");
+    assert.equal(opciones.status, 200);
+    assert.deepEqual(opciones.cuerpo, {
+      candidatos: ["Lucas Ferreyra", nombreDelOtro].sort((x, y) => x.localeCompare(y, "es")),
+      escenarios: ["Llamada de cobranza", "Recordatorios duplicados"]
+    });
+    assert.deepEqual((await pedir(app.base, "/api/informes/opciones?empresa=MKT+Contact+Center")).cuerpo, { candidatos: [nombreDelOtro], escenarios: ["Llamada de cobranza"] });
+    assert.equal((await pedir(app.base, "/api/informes/opciones", { method: "POST", json: {} })).status, 405);
+
+    for (const id of [a, b, c]) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
+  });
+
+  test("informes: una fecha que no se entiende o un rango al revés responden 400 con el motivo", async () => {
+    for (const ruta of ["/api/informes", "/api/informes/opciones"]) {
+      const r = await pedir(app.base, ruta + "?desde=ayer");
+      assert.equal(r.status, 400, ruta);
+      assert.match(r.cuerpo.error.message, /desde/);
+    }
+    const alReves = await pedir(app.base, "/api/informes?desde=2026-11-10T00:00:00.000Z&hasta=2026-11-01T00:00:00.000Z");
+    assert.equal(alReves.status, 400);
+    assert.match(alReves.cuerpo.error.message, /al revés/);
   });
 
   test("informes: rechaza cuerpos que no son informes", async () => {

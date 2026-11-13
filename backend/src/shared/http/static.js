@@ -15,6 +15,9 @@ function serveStatic(req, res, url) {
   let rel;
   try { rel = decodeURIComponent(url.pathname); } catch (_) { res.writeHead(400); return res.end("Ruta inválida"); }
   if (rel.includes("\0")) { res.writeHead(400); return res.end("Ruta inválida"); }
+  // En Windows "\" separa carpetas ("..\.env" sale de /public); en Linux es un carácter más.
+  // Ninguna ruta de la app lleva "\": se rechaza siempre, así el servidor responde igual en los dos sistemas.
+  if (rel.includes("\\")) { res.writeHead(403); return res.end("Prohibido"); }
   if (rel === "/" || rel === "") rel = "/index.html";
   const file = path.resolve(PUBLIC, "." + rel);
   if (file !== PUBLIC && !file.startsWith(PUBLIC + path.sep)) { res.writeHead(403); return res.end("Prohibido"); }

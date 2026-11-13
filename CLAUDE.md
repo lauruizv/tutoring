@@ -37,6 +37,7 @@ Otras reglas del servidor:
 - **Intentos de ingreso:** 5 fallos por usuario y 30 por IP en 60 segundos, después responde 429. En un aula todos salen por la misma IP.
 - **Origen:** los POST, PUT y DELETE que llegan desde otro `Origin` se rechazan.
 - **Permisos por rol** (`exigir`): solo `empresa` guarda la configuración, borra informes y usa `/api/diagnostico`. Cada estudiante o junior ve solo sus informes (`loVe`, por `usuarioId`) y el servidor pone `candidato` con el nombre de la sesión.
+- **Informes (`backend/src/modules/simulaciones/`):** el controlador lee el pedido, el servicio decide quién ve qué y el repositorio guarda. `GET /api/informes` acepta los filtros `desde`, `hasta`, `candidato`, `escenario` y `empresa`, y `GET /api/informes/opciones` devuelve los candidatos y las simulaciones que existen, para los desplegables. `informes/filtro.js` es lógica pura (`normalizarFiltro`, `cumple`): entra lo que cumple `desde <= fecha < hasta`, el candidato se busca por una parte del nombre sin importar tildes ni mayúsculas y la simulación, por el título completo. `repositories/informes-archivos.repository.js` es lo único que sabe dónde están guardados los informes: para las listas recibe el filtro y un **alcance** (`{ todos: true }` para la empresa, `{ usuarioId }` para el resto; cualquier otra cosa no ve nada) y devuelve resúmenes. Sus funciones son asíncronas para que el día que haya una base de datos se escriba otro repositorio con las mismas funciones (`leer`, `guardar`, `borrar`, `listarResumenes`, `listarOpciones`) y se cambie una sola línea, en `repositories/informes.repository.js`.
 - **Llave local:** los scripts de la compu (`chequeo`, `probar-ia`, `evals/puente.mjs`) no tienen cookie. Mandan el contenido de `DATA_DIR/llave-local.txt` en el encabezado `x-llave-local` y entran con permisos de empresa.
 
 **Proveedores de IA.** Hay tres, configurados por `.env`:
@@ -50,7 +51,7 @@ Otras reglas del servidor:
 
 **Código compartido entre navegador y Node.** `public/js/core.js` es UMD: el servidor y los tests lo importan con `require`, y el navegador lo expone en `window.T.core`. Contiene la lógica pura: historial, `extraerJSON`/`parseEvaluacion`, `puntajeCriterio`/`puntajePonderado` (puntaje de 0 a 100 a partir de criterios de 1 a 5, con `VALOR_NIVEL`: 1 = 0, 2 = 35, 3 = 65, 4 = 85, 5 = 100; los criterios en `null` quedan fuera) y la migración de la configuración. `prompts.js` y `defaults.js` solo existen en el navegador (`window.T.prompts`, `T.DEFAULTS`). Cuando Node necesita esos archivos, los carga en un contexto `vm` (ver `evals/puente.mjs`).
 
-**Frontend (`public/js/app.js`).** Es una SPA sin framework: `VIEWS[nombre]`, `go()` y el estado en `S`. Al arrancar, `boot()` → `entrar()` pide `/api/yo`; sin sesión muestra `VIEWS.login` (`body.sin-sesion` oculta la barra lateral). El perfil sale del rol de la sesión: ya no hay selector de perfil ni campo de nombre. Cada rol tiene su pantalla de inicio (`INICIO`) y su color (`body[data-rol]`). El `localStorage` se separa por usuario (`k()`). Un 401 `sin_ingreso` en cualquier pedido lleva al ingreso con aviso (`T.api.onSinSesion`). Hay tres perfiles: estudiante (se muestra como "Candidato": simulación por voz e informe), junior (chat con el mentor) y empresa (configura contexto, escenarios y criterios, y ve los informes). El informe se arma en el navegador (`runEvaluation`): prompt de `T.prompts.evaluacion`, `purpose: "eval"`, parseo y puntaje con `core`, y después `POST /api/informes`. El servidor guarda el informe sin tocarlo. Candidato y empresa ven la misma vista (`VIEWS.report`).
+**Frontend (`public/js/app.js`).** Es una SPA sin framework: `VIEWS[nombre]`, `go()` y el estado en `S`. Al arrancar, `boot()` → `entrar()` pide `/api/yo`; sin sesión muestra `VIEWS.login` (`body.sin-sesion` oculta la barra lateral). El perfil sale del rol de la sesión: ya no hay selector de perfil ni campo de nombre. Cada rol tiene su pantalla de inicio (`INICIO`) y su color (`body[data-rol]`). El `localStorage` se separa por usuario (`k()`). Un 401 `sin_ingreso` en cualquier pedido lleva al ingreso con aviso (`T.api.onSinSesion`). Hay tres perfiles: estudiante (se muestra como "Candidato": simulación por voz e informe), junior (chat con el mentor) y empresa (configura contexto, escenarios y criterios, y ve los informes). El informe se arma en el navegador (`runEvaluation`): prompt de `T.prompts.evaluacion`, `purpose: "eval"`, parseo y puntaje con `core`, y después `POST /api/informes`. El servidor guarda el informe sin tocarlo. Candidato y empresa ven la misma vista (`VIEWS.report`). Las dos listas de informes ("Mis informes" e "Informes" de la empresa) usan `listaDeInformes` y `barraFiltros`: fechas, simulación y, solo para la empresa, candidato. El navegador convierte los días elegidos en instantes con `core.rangoDeDias` (en la hora de la persona, para que "hasta el 10" incluya todo el 10) y filtra el servidor. Lo elegido queda en `S.filtros` y la última lista, en `S.listaInformes`, así al volver de un informe se ve igual. `S.informes` es otra cosa: todos los informes del candidato, sin filtros, para "Tus simulaciones" del inicio.
 
 **Quién arranca la llamada.** El campo `inicio` del escenario define quién habla primero: sin el campo, el cliente (como siempre); `"atiende"` (llamada entrante: `vozInicio` devuelve `null` y los tres motores esperan a que hable el candidato); `"llama"` (llamada saliente: el cliente atiende solo con "¿Hola?"). El prompt de voz y el de evaluación lo mencionan solo si el campo está, así los escenarios viejos no cambian.
 
@@ -74,6 +75,8 @@ Otras reglas del servidor:
 - El Agent SDK se reemplaza con `CLAUDE_SDK_MODULE` (por ejemplo, `test/fake-sdk-*.mjs`).
 - `startApp` siembra usuarios (`estudiante1`, `estudiante2`, `junior1`, `empresa1`, con clave `clave-de-prueba`, y `nuevo1`, que entra con `app.codigoNuevo`) y entra como `empresa1`. `pedir()` y `pedirMensajes()` mandan esa cookie salvo `{ cookie: null }` u otra. En Playwright se usa `ingresarEn(page, base, usuario)` y `salirEn(page)`.
 - Cuando agregues una variable de entorno que lea el servidor, neutralizala en `startApp` para que no se filtre el `.env` real.
+- La voz del navegador (`speechSynthesis`) depende del sistema: el Chromium de Linux no trae ninguna voz. Una prueba que necesite que el cliente esté "hablando" usa la voz simulada de `test/helpers.mjs` (`vozSimuladaEn`, `vozSimuladaDe`, `vozRealEn`), que además registra qué se dijo y si se cortó.
+- En Playwright, un clic sobre algo que se mueve (la esfera late mientras habla el cliente) espera a que se quede quieto. Si el clic tiene que llegar en ese momento, va con `{ force: true }`.
 
 ## Evals (`evals/`)
 
@@ -88,6 +91,29 @@ Hoy hay 5 casos sintéticos, todos del escenario `incidente-viernes` de Nodo, co
 ## Bitácora
 
 Registro paso a paso de los cambios del programa: qué se decidió, por qué y dónde está el detalle. Se actualiza en cada paso, con el más nuevo arriba. Cuando algo se implementa, se describe también en la sección de arquitectura que corresponda.
+
+### 2026-11-11 · La prueba de interrumpir al cliente usa una voz simulada (rama `feat/filtros-informes`)
+
+- **Qué pasaba:** en WSL fallaba "interrumpir al cliente lo corta y pasa a escuchar". El Chromium de Linux no trae voces de síntesis (`speechSynthesis` da `synthesis-failed`), así que el cliente nunca llegaba a estar "hablando".
+- **Qué se hizo:** la prueba reemplaza la voz del navegador por una simulada (`vozSimuladaEn` en `test/helpers.mjs`): no suena, pero cada frase arranca, dura según su largo y termina, o se corta con `cancel()`. Al terminar se vuelve a la voz real, para que las demás pruebas corran como siempre.
+- **Lo que apareció al hacerlo:** la prueba vieja pasaba sin probar la interrupción. La esfera late mientras el cliente habla y Playwright espera a que un elemento se quede quieto antes de hacer clic: el clic tardaba 6 segundos y llegaba cuando el cliente ya había terminado de hablar solo. Como la prueba solo miraba que al final dijera "Te escucho", daba bien igual. Ahora el clic va con `force` y la prueba comprueba, con el registro de la voz simulada, que el cliente estaba hablando y que la voz se cortó una vez.
+- **La app no cambió:** la interrupción funcionaba; lo que estaba mal era la prueba.
+- **Estado:** `npm test` pasa 183 de 183 y `npm run test:e2e`, 42 de 42, en WSL y en Windows.
+
+### 2026-11-11 · Filtros en las listas de informes (rama `feat/filtros-informes`)
+
+- **Qué hay:** "Mis informes" (candidato) e "Informes" (empresa) tienen una barra de filtros: Desde, Hasta, Simulación y, solo para la empresa, Candidato (se escribe y sugiere nombres), más un botón Limpiar. Los filtros siguen puestos al volver de un informe y se borran al salir de la cuenta.
+- **Dónde se filtra:** en el servidor. La lista sale de un repositorio (`backend/src/modules/simulaciones/repositories/informes-archivos.repository.js`) que recibe el filtro y el alcance de quien pregunta. Es la pieza que se cambia el día que los informes pasen a PostgreSQL; `filtro.js` y el resto del servidor quedan igual.
+- **Decisiones:**
+  - Las fechas viajan como instantes exactos, no como días: el navegador calcula el comienzo del día en la hora de la persona. Si viajara el día, "hasta el 10" cortaría 3 horas antes en Argentina.
+  - El alcance mal armado no ve nada (`{}` o un `usuarioId` vacío): un descuido en el servidor nunca abre la lista completa.
+  - El filtro por empresa, que estaba en el navegador, pasó al servidor. "Mis informes" ya no filtra por nombre en el navegador: el servidor filtra por usuario, y dos personas con el mismo nombre no se mezclan.
+  - Las opciones de los desplegables no se achican con los otros filtros: si no, al elegir una simulación desaparecerían las demás.
+  - El resumen de la lista suma `duracionSeg` (lo necesita la exportación).
+  - Al entrar, solo el candidato pide sus informes (los usa el inicio); la empresa pide su lista al abrir Informes. Antes se pedían dos veces.
+- **Además:** los archivos estáticos rechazan cualquier ruta con `\` (antes, `/..\.env` daba 403 en Windows y 404 en Linux), y en WSL quedó instalado el Chromium que usa el Playwright del proyecto (`node node_modules/playwright/cli.js install chromium`, desde la carpeta del proyecto: con `npx` desde otra carpeta se baja otra versión).
+- **Limitación:** el repositorio de archivos lee todos los JSON en cada pedido, igual que antes. Se resuelve con la base de datos.
+- **Estado:** `npm test` pasa 183 de 183 (en WSL y en Windows) y `npm run test:e2e`, 42 de 42 en Windows y 41 de 42 en WSL. La que fallaba en WSL era la de interrumpir al cliente: ver la entrada de arriba.
 
 ### 2026-11-11 · "Lo que tenés a mano" durante la llamada (rama `feat/ficha-en-llamada`)
 

@@ -30,6 +30,14 @@ T.api = (function () {
     return cuerpo;
   }
 
+  // "?a=1&b=2" a partir de un objeto, salteando lo vacío ("" si no queda nada).
+  function consulta(campos) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(campos || {})) if (v != null && v !== "") q.set(k, v);
+    const texto = q.toString();
+    return texto ? "?" + texto : "";
+  }
+
   // Llama al modelo de IA (el proveedor lo elige el servidor según el .env) con streaming.
   // purpose: "chat" | "voice" | "eval" (el servidor elige el modelo).
   // onStatus(texto): avisos mientras espera, por ejemplo "Reintentando…".
@@ -147,7 +155,10 @@ T.api = (function () {
       save: data => jsonReq("/api/empresa", { method: "PUT", body: JSON.stringify(data) })
     },
     informes: {
-      list: () => jsonReq("/api/informes"),
+      // filtro (opcional): { desde, hasta, candidato, escenario, empresa }. Lo vacío no se manda.
+      list: filtro => jsonReq("/api/informes" + consulta(filtro)),
+      // Candidatos y simulaciones que existen, para los desplegables de los filtros.
+      opciones: filtro => jsonReq("/api/informes/opciones" + consulta(filtro)),
       get: id => jsonReq("/api/informes/" + encodeURIComponent(id)),
       save: data => jsonReq("/api/informes", { method: "POST", body: JSON.stringify(data) }),
       remove: id => jsonReq("/api/informes/" + encodeURIComponent(id), { method: "DELETE" })

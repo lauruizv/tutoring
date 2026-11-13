@@ -16,7 +16,7 @@ describe("login y sesión", () => {
   after(async () => { await app.stop(); });
 
   test("sin sesión, la API responde 401 con el mensaje en español", async () => {
-    for (const [ruta, method] of [["/api/config", "GET"], ["/api/empresa", "GET"], ["/api/informes", "GET"], ["/api/yo", "GET"], ["/api/voz/token", "POST"], ["/api/diagnostico", "GET"]]) {
+    for (const [ruta, method] of [["/api/config", "GET"], ["/api/empresa", "GET"], ["/api/informes", "GET"], ["/api/informes/opciones", "GET"], ["/api/yo", "GET"], ["/api/voz/token", "POST"], ["/api/diagnostico", "GET"]]) {
       const r = await pedir(app.base, ruta, { method, cookie: null });
       assert.equal(r.status, 401, ruta);
       assert.equal(r.cuerpo.error.message, SIN_SESION, ruta);
@@ -167,6 +167,19 @@ describe("permisos por rol", () => {
 
     assert.ok((await pedir(app.base, "/api/informes")).cuerpo.some(x => x.id === id), "la empresa lo ve");
     assert.equal((await pedir(app.base, "/api/informes/" + id, { method: "DELETE" })).status, 200);
+  });
+
+  test("los filtros no abren informes ajenos: buscar el nombre de otro no muestra nada, y las opciones son solo las propias", async () => {
+    const deLucas = (await pedir(app.base, "/api/informes", { method: "POST", json: INFORME, cookie: est1 })).cuerpo.id;
+    const deAna = (await pedir(app.base, "/api/informes", { method: "POST", cookie: est2, json: { ...INFORME, escenario: { ...INFORME.escenario, titulo: "Llamada de cobranza" } } })).cuerpo.id;
+
+    assert.deepEqual((await pedir(app.base, "/api/informes?candidato=Lucas", { cookie: est2 })).cuerpo, [], "Ana busca a Lucas y no ve nada");
+    assert.deepEqual((await pedir(app.base, "/api/informes?candidato=Ana", { cookie: est2 })).cuerpo.map(x => x.id), [deAna]);
+    assert.deepEqual((await pedir(app.base, "/api/informes/opciones", { cookie: est2 })).cuerpo, { candidatos: ["Ana Paz"], escenarios: ["Llamada de cobranza"] });
+    assert.deepEqual((await pedir(app.base, "/api/informes/opciones", { cookie: est1 })).cuerpo.candidatos, ["Lucas Ferreyra"]);
+    assert.deepEqual((await pedir(app.base, "/api/informes/opciones")).cuerpo.candidatos, ["Ana Paz", "Lucas Ferreyra"], "la empresa ve a los dos");
+
+    for (const id of [deLucas, deAna]) await pedir(app.base, "/api/informes/" + id, { method: "DELETE" });
   });
 
   test("un informe viejo sin usuarioId solo lo ve la empresa", async () => {

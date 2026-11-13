@@ -10,7 +10,7 @@
    Si Playwright no está instalado, las pruebas se saltean con un aviso en vez de fallar. */
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { startApp, pedir, ingresarEn, salirEn, CLAVE_PRUEBA, configEjemplo, atenderEn } from "./helpers.mjs";
+import { startApp, pedir, ingresarEn, salirEn, CLAVE_PRUEBA, configEjemplo, atenderEn, vozSimuladaEn, vozSimuladaDe, vozRealEn } from "./helpers.mjs";
 
 let chromium = null;
 try { ({ chromium } = await import("playwright")); } catch (_) {}
@@ -143,6 +143,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
 
     await page.locator('.nav button:has-text("Mis informes")').click();
     await esperarVista("Mis informes");
+    await page.locator(".list button").first().waitFor();   // la lista llega del servidor
     assert.equal(await page.locator(".list button").count(), 1);
     assert.equal(await page.locator(".score-chip").textContent(), "81/100");
   });
@@ -215,6 +216,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
   test("empresa: ve el informe del candidato y lo puede eliminar", async () => {
     await page.locator('.nav button:has-text("Informes")').click();
     await esperarVista("Informes de candidatos");
+    await page.locator(".list button").first().waitFor();   // la lista llega del servidor
     assert.equal(await page.locator(".list button").count(), 1);
     await page.locator(".list button").first().click();
     await esperarVista("Informe");
@@ -232,15 +234,27 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await esperarVista("Simulaciones por voz");
     await page.locator(".card").first().click();
     await esperarVista("Simulación");
-    await page.locator("#startCall").click();
-    await atenderEn(page);
-    await esperarVista("Llamada en curso");
-    await page.waitForFunction(() => /hablando/.test(document.querySelector(".state-label").textContent), null, { timeout: 15000 });
+    // Con una voz simulada, para que no dependa de las voces del sistema (el Chromium de Linux no trae ninguna).
+    await vozSimuladaEn(page);
+    try {
+      await page.locator("#startCall").click();
+      await atenderEn(page);
+      await esperarVista("Llamada en curso");
+      await page.waitForFunction(() => /hablando/.test(document.querySelector(".state-label").textContent), null, { timeout: 15000 });
+      const antes = await vozSimuladaDe(page);
+      assert.ok(antes.hablando && antes.dichos.length >= 1, "el cliente está hablando");
+      assert.equal(antes.cortes, 0);
 
-    await page.locator(".orb.big").click();
-    await page.waitForFunction(() => /Te escucho|silenciado/.test(document.querySelector(".state-label").textContent), null, { timeout: 10000 });
-    // Lo que alcanzó a decir queda en la transcripción: no se pierde para la evaluación.
-    assert.ok(await page.locator(".transcript .ln.c").count() >= 1);
+      // force: la esfera late mientras el cliente habla y Playwright esperaría a que se quede quieta,
+      // o sea, a que termine de hablar solo: el clic llegaría tarde y no interrumpiría nada.
+      await page.locator(".orb.big").click({ force: true });
+      await page.waitForFunction(() => /Te escucho|silenciado/.test(document.querySelector(".state-label").textContent), null, { timeout: 10000 });
+      const despues = await vozSimuladaDe(page);
+      assert.equal(despues.hablando, false, "la voz se calló");
+      assert.equal(despues.cortes, 1, "se cortó la voz una vez");
+      // Lo que alcanzó a decir queda en la transcripción: no se pierde para la evaluación.
+      assert.ok(await page.locator(".transcript .ln.c").count() >= 1);
+    } finally { await vozRealEn(page); }
   });
 
   test("si el cliente se despide con [FIN], la llamada se cierra sola", async () => {
@@ -456,5 +470,118 @@ describe("ejemplo MKT Contact Center", { skip: saltear }, () => {
     await page.locator("button", { hasText: "Volver" }).click();
     await page.locator(".card", { hasText: "Quiero dar de baja" }).click();
     assert.doesNotMatch(await page.locator(".brief").innerText(), /lo que tenés a mano/i);
+  });
+});
+
+describe("filtros de los informes", { skip: saltear }, () => {
+  let app, browser, lucas, ana;
+  const DIA = 24 * 60 * 60 * 1000;
+  const haceDias = n => new Date(Date.now() - n * DIA).toISOString();
+  const informe = extra => ({
+    duracionSeg: 200, empresa: "Nodo Software", puntaje: 70, evaluacion: { resumen: "r", criterios: [] }, criteriosDef: [], transcripcion: [],
+    escenario: { titulo: "Llamada de cobranza", resumen: "r", cliente: "Diego Sosa", objetivo: "o" }, ...extra
+  });
+  const crear = async (cookie, extra) => assert.equal((await pedir(app.base, "/api/informes", { method: "POST", cookie, json: informe(extra) })).status, 200);
+  const nuevaPagina = async () => (await browser.newContext({ locale: "es-AR" })).newPage();
+  const vista = (page, t) => page.waitForFunction(t => document.getElementById("viewLabel").textContent === t, t, { timeout: 15000 });
+  const filas = (page, n) => page.waitForFunction(n => document.querySelectorAll(".informes-lista .list button").length === n, n, { timeout: 10000 });
+  // El día de hoy menos n, como lo escribe el campo de fecha y en la hora del navegador.
+  const dia = (page, n) => page.evaluate(n => {
+    const d = new Date(); d.setDate(d.getDate() - n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, n);
+
+  before(async () => {
+    app = await startApp({ provider: "gemini" });
+    browser = await chromium.launch();
+    lucas = await app.ingresar("estudiante1"); ana = await app.ingresar("estudiante2");
+    // Lucas: una cobranza de hoy y una baja de hace 10 días.
+    await crear(lucas, { fecha: haceDias(0) });
+    await crear(lucas, { fecha: haceDias(10), escenario: { titulo: "Quiero dar de baja", resumen: "r", cliente: "Marta", objetivo: "o" } });
+  });
+  after(async () => { if (browser) await browser.close(); if (app) await app.stop(); });
+
+  test("quien todavía no hizo ninguna simulación ve el mensaje, sin la barra de filtros", async () => {
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "estudiante2");
+    await page.locator('.nav button:has-text("Mis informes")').click();
+    await vista(page, "Mis informes");
+    await page.getByText("Todavía no hiciste ninguna simulación.").waitFor();
+    assert.ok(await page.locator(".filtros").isHidden());
+  });
+
+  test("el candidato filtra sus informes por simulación y no tiene filtro de candidato", async () => {
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "estudiante1");
+    await page.locator('.nav button:has-text("Mis informes")').click();
+    await vista(page, "Mis informes");
+    await filas(page, 2);
+    assert.equal(await page.locator("#fCandidato").count(), 0, "el candidato no elige candidato");
+    await page.waitForFunction(() => document.querySelectorAll("#fEscenario option").length === 3);
+    assert.deepEqual(await page.locator("#fEscenario option").allTextContents(), ["Todas", "Llamada de cobranza", "Quiero dar de baja"]);
+
+    await page.locator("#fEscenario").selectOption("Quiero dar de baja");
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Quiero dar de baja/);
+
+    // El filtro es de esta lista: el inicio sigue mostrando todas sus simulaciones.
+    await page.locator('.nav button:has-text("Simulaciones")').click();
+    await vista(page, "Simulaciones por voz");
+    assert.equal(await page.locator(".list button").count(), 2);
+  });
+
+  test("la empresa filtra por candidato, simulación y fechas, y los filtros siguen puestos al volver de un informe", async () => {
+    // Ana: una cobranza de hace 3 días. Y un informe de otra empresa, que acá no se tiene que ver.
+    await crear(ana, { fecha: haceDias(3) });
+    await crear(ana, { fecha: haceDias(1), empresa: "Otra Empresa SA", escenario: { titulo: "Escenario de otra empresa", resumen: "r", cliente: "x", objetivo: "o" } });
+
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "empresa1");
+    await vista(page, "Informes de candidatos");
+    await filas(page, 3);
+    await page.waitForFunction(() => document.querySelectorAll("#fCandidatos option").length === 2);
+    assert.deepEqual(await page.locator("#fCandidatos option").evaluateAll(os => os.map(o => o.value)), ["Ana Paz", "Lucas Ferreyra"]);
+    assert.deepEqual(await page.locator("#fEscenario option").allTextContents(), ["Todas", "Llamada de cobranza", "Quiero dar de baja"], "sin las simulaciones de otra empresa");
+    assert.ok(await page.locator("#fLimpiar").isDisabled(), "sin filtros no hay nada que limpiar");
+
+    // Candidato: alcanza con una parte del nombre, sin importar las mayúsculas.
+    await page.locator("#fCandidato").fill("PAZ");
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Ana Paz/);
+    await page.locator("#fCandidato").fill("nadie se llama así");
+    await page.getByText("No hay informes con estos filtros.").waitFor();
+    await page.locator("#fLimpiar").click();
+    await filas(page, 3);
+    assert.equal(await page.locator("#fCandidato").inputValue(), "");
+
+    // Simulación, y el filtro sigue puesto al volver del informe.
+    await page.locator("#fEscenario").selectOption("Quiero dar de baja");
+    await filas(page, 1);
+    await page.locator(".informes-lista .list button").first().click();
+    await vista(page, "Informe");
+    await page.locator("button", { hasText: "Volver" }).click();
+    await vista(page, "Informes de candidatos");
+    await filas(page, 1);
+    assert.equal(await page.locator("#fEscenario").inputValue(), "Quiero dar de baja");
+    await page.locator("#fLimpiar").click();
+    await filas(page, 3);
+
+    // Fechas: "desde hace 5 días" deja afuera el de hace 10; "hasta hace 1 día" deja afuera el de hoy.
+    await page.locator("#fDesde").fill(await dia(page, 5));
+    await filas(page, 2);
+    await page.locator("#fHasta").fill(await dia(page, 1));
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Ana Paz/);
+    // "Hasta hoy" incluye el informe hecho hoy, a cualquier hora.
+    await page.locator("#fHasta").fill(await dia(page, 0));
+    await filas(page, 2);
+    await page.locator("#fDesde").fill(await dia(page, 0));
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Lucas Ferreyra/);
+
+    // El rango al revés avisa y no busca.
+    await page.locator("#fHasta").fill(await dia(page, 4));
+    await page.getByText("“Desde” no puede ser posterior a “Hasta”.").waitFor();
+    await filas(page, 1);
   });
 });

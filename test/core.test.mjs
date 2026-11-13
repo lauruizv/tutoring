@@ -177,3 +177,30 @@ describe("largoDecible", () => {
     assert.equal(core.largoDecible("", true), 0);
   });
 });
+
+describe("rangoDeDias", () => {
+  // Los días son en la hora de quien usa la app; por eso lo esperado se arma con la hora local de esta máquina.
+  const comienzoDe = (anio, mes, dia) => new Date(anio, mes - 1, dia).toISOString();
+
+  test("desde es el comienzo del día y hasta, el comienzo del día siguiente (para incluir el día entero)", () => {
+    assert.deepEqual(core.rangoDeDias("2026-11-10", "2026-11-10"), { desde: comienzoDe(2026, 11, 10), hasta: comienzoDe(2026, 11, 11) });
+  });
+
+  test("el día siguiente cruza bien el fin de mes y el fin de año", () => {
+    assert.equal(core.rangoDeDias("", "2026-11-30").hasta, comienzoDe(2026, 12, 1));
+    assert.equal(core.rangoDeDias("", "2026-12-31").hasta, comienzoDe(2027, 1, 1));
+    assert.equal(core.rangoDeDias("", "2028-02-28").hasta, comienzoDe(2028, 2, 29), "2028 es bisiesto");
+  });
+
+  test("un día vacío no filtra", () => {
+    assert.deepEqual(core.rangoDeDias("", ""), { desde: "", hasta: "" });
+    assert.deepEqual(core.rangoDeDias(undefined, null), { desde: "", hasta: "" });
+    assert.equal(core.rangoDeDias("2026-11-10", "").hasta, "");
+  });
+
+  test("un día mal escrito o que no existe queda vacío", () => {
+    for (const dia of ["10/11/2026", "2026-11-10T03:00:00Z", "ayer", "2026-02-31", "2026-13-01"]) {
+      assert.deepEqual(core.rangoDeDias(dia, dia), { desde: "", hasta: "" }, dia);
+    }
+  });
+});

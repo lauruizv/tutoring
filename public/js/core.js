@@ -186,6 +186,23 @@
     return esp > 30 ? esp + 1 : corte;
   }
 
+  // ---------------------------------------------------------------- filtros de los informes
+  // De los días que elige la persona ("2026-11-10", en su hora) a los instantes que entiende el servidor.
+  // `desde` es el comienzo de ese día y `hasta`, el comienzo del día siguiente (el servidor lo deja afuera):
+  // así "hasta el 10" incluye todo el 10. Un día vacío o que no existe queda en "".
+  function rangoDeDias(desde, hasta) {
+    const comienzo = (dia, sumar) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dia == null ? "" : String(dia));
+      if (!m) return "";
+      const [anio, mes, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+      const fecha = new Date(anio, mes, d);
+      // new Date acepta el 31 de febrero y lo corre a marzo: si no quedó el día pedido, no existe.
+      if (fecha.getFullYear() !== anio || fecha.getMonth() !== mes || fecha.getDate() !== d) return "";
+      return new Date(anio, mes, d + sumar).toISOString();
+    };
+    return { desde: comienzo(desde, 0), hasta: comienzo(hasta, 1) };
+  }
+
   // ---------------------------------------------------------------- configuración de la empresa
   // Contextos generales: siempre presentes (se pueden dejar vacíos, no borrar).
   const GENERALES = [
@@ -278,7 +295,7 @@
   }
   const esSoftware = cfg => /software|sistemas|tecnolog|desarrollo|programaci|inform[aá]tica|\bit\b|saas/i.test(str(cfg && cfg.rubro));
 
-  const api = { normalizarHistorial, extraerJSON, parseEvaluacion, puntajeCriterio, puntajePonderado, buscarCriterio, clave, textoHablable, largoDecible,
+  const api = { normalizarHistorial, extraerJSON, parseEvaluacion, puntajeCriterio, puntajePonderado, buscarCriterio, clave, textoHablable, largoDecible, rangoDeDias,
     GENERALES, ACCIONES_JUNIOR, esFormatoViejo, migrarConfig, normalizarConfig, contextoDe, responsableTexto, esSoftware, nuevoId };
 
   if (typeof module === "object" && module.exports) module.exports = api;
