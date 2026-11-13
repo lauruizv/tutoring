@@ -121,7 +121,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await page.locator("#hang").click();
     await esperarVista("Informe");
 
-    assert.equal(await page.locator(".ring .n b").textContent(), "71");
+    assert.equal(await page.locator(".ring .n b").textContent(), "81");
     const criterios = await page.locator(".crit .nm").evaluateAll(ns => ns.map(n => n.firstChild.textContent));
     assert.deepEqual(criterios, ["Escucha y claridad", "Empatía y contención", "Cierre y próximos pasos", "Criterio y autonomía", "Receptividad", "Curiosidad", "Iniciativa"]);
 
@@ -138,12 +138,12 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     const { cuerpo } = await pedir(app.base, "/api/informes");
     assert.equal(cuerpo.length, 1);
     assert.equal(cuerpo[0].candidato, "Lucas Ferreyra");
-    assert.equal(cuerpo[0].puntaje, 71);
+    assert.equal(cuerpo[0].puntaje, 81);
 
     await page.locator('.nav button:has-text("Mis informes")').click();
     await esperarVista("Mis informes");
     assert.equal(await page.locator(".list button").count(), 1);
-    assert.equal(await page.locator(".score-chip").textContent(), "71/100");
+    assert.equal(await page.locator(".score-chip").textContent(), "81/100");
   });
 
   test("junior: el mentor responde con los bloques [Cómo se hace] [Por qué importa] [Cómo lo hacemos acá] [Tu turno]", async () => {
@@ -253,7 +253,8 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await campo.press("Enter");
     // Al detectar [FIN] cuelga solo y arranca la evaluación.
     await esperarVista("Informe");
-    assert.equal(await page.locator(".ring .n b").textContent(), "71");
+    // Antes se bajó el peso del primer criterio (de 15 a 1), por eso no da igual que el primer informe.
+    assert.equal(await page.locator(".ring .n b").textContent(), "80");
     // El [FIN] no tiene que quedar escrito en la transcripción del informe.
     const conversacion = await page.locator("details.tx").innerText();
     assert.ok(!/\[FIN\]/.test(conversacion.replace(/DECI:.*/g, "")), "el [FIN] no debería mostrarse");

@@ -107,6 +107,10 @@
     return r || null;
   }
 
+  // Lo que vale cada nivel de 1 a 5 en la escala de 0 a 100. El 3 ("cumple, lo hace bien")
+  // vale 65 y no 50: un 50/100 se lee como un fracaso aunque la persona haya hecho bien la tarea.
+  const VALOR_NIVEL = [null, 0, 35, 65, 85, 100];
+
   // Puntaje de 0 a 100 ponderado por el peso de cada criterio.
   // Solo promedia los criterios que el modelo realmente puntuó e informa la cobertura,
   // para que el informe pueda avisar si quedó incompleto.
@@ -120,10 +124,9 @@
       if (p == null) return;
       let peso = Number(c && c.peso);
       if (!Number.isFinite(peso) || peso <= 0) peso = 1;
-      // Escala 1-5 llevada a 0-100 % (1 = 0 %, 3 = 50 %, 5 = 100 %).
-      num += (p - 1) * peso; den += 4 * peso; cubiertos++;
+      num += VALOR_NIVEL[p] * peso; den += peso; cubiertos++;
     });
-    return { puntaje: den ? Math.round((num / den) * 100) : null, cubiertos, total: defs.length };
+    return { puntaje: den ? Math.round(num / den) : null, cubiertos, total: defs.length };
   }
 
   // ---------------------------------------------------------------- voz

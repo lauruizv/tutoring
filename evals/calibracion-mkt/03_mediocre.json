@@ -1,0 +1,34 @@
+{
+  "nombre": "cal-mkt-03-mediocre",
+  "descripcion": "Se presenta y valida bien, pero no pregunta qué puede pagar: ofrece las tres cuotas de entrada, con montos y fechas vagos. No lee el acuerdo, da el número sin confirmar y corta sin preguntar si hay algo más.",
+  "origen": "sintético, para calibrar (no es una conversación real)",
+  "empresa": "mkt",
+  "escenarioId": "mkt-cobranza",
+  "candidato": "Candidato de prueba",
+  "minutos": 4,
+  "esperado": {
+    "total": { "min": 25, "max": 55 },
+    "criterios": {
+      "Escucha activa": { "min": 2, "max": 3 },
+      "Empatía y control emocional": { "min": 1, "max": 3 },
+      "Claridad": { "min": 1, "max": 2 },
+      "Procedimiento": { "min": 2, "max": 4 },
+      "Resolución": { "min": 2, "max": 3 },
+      "Cierre": { "min": 1, "max": 2 }
+    }
+  },
+  "transcripcion": [
+    { "role": "assistant", "text": "¿Hola?" },
+    { "role": "user", "text": "Hola, ¿qué tal? Soy Lucas, de ConectAR. ¿Diego Sosa?" },
+    { "role": "assistant", "text": "Sí, ¿quién?" },
+    { "role": "user", "text": "De ConectAR. Acá figura DNI 33.221.004, nacido el 9 de noviembre del 91. ¿Sos vos?" },
+    { "role": "assistant", "text": "Sí, soy yo." },
+    { "role": "user", "text": "Ok. Tenés una deuda de 38.000 pesos, dos facturas." },
+    { "role": "assistant", "text": "Ya sé, ya sé. Es que me quedé sin un laburo y estoy complicado." },
+    { "role": "user", "text": "Bueno, para eso hay un plan en tres cuotas. Lo vas pagando de a poco, todos los meses." },
+    { "role": "assistant", "text": "¿Y de cuánto serían? ¿Cuándo arranco?" },
+    { "role": "user", "text": "Y, es dividir los 38 en tres. Arrancás cuando puedas, más o menos a principio de mes." },
+    { "role": "assistant", "text": "Bueno... ¿pago por transferencia?" },
+    { "role": "user", "text": "Sí, sí, te llega todo por SMS. El número de gestión es 8812-461. Listo, chau." }
+  ]
+}

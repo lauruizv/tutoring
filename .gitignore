@@ -10,3 +10,6 @@ data/logs/
 data/usuarios.json
 data/sesiones.json
 data/llave-local.txt
+
+# Caché de Python (evals)
+__pycache__/

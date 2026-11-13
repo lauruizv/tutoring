@@ -1,0 +1,37 @@
+{
+  "nombre": "cal-mkt-06-pide-datos",
+  "descripcion": "Llamada saliente buena en todo lo demás, pero le pide al cliente el DNI y la fecha de nacimiento. El cliente desconfía y no los da; el operador se los dice y recién ahí sigue.",
+  "origen": "sintético, para calibrar (no es una conversación real)",
+  "empresa": "mkt",
+  "escenarioId": "mkt-cobranza",
+  "candidato": "Candidato de prueba",
+  "minutos": 6,
+  "esperado": {
+    "total": { "min": 60, "max": 85 },
+    "criterios": {
+      "Procedimiento": { "min": 1, "max": 3 }
+    }
+  },
+  "transcripcion": [
+    { "role": "assistant", "text": "¿Hola?" },
+    { "role": "user", "text": "Hola, buen día, te habla Lucas Ferreira, de ConectAR. ¿Hablo con Diego Sosa?" },
+    { "role": "assistant", "text": "Sí, soy yo. ¿Qué pasó?" },
+    { "role": "user", "text": "Para tu seguridad, ¿me decís tu DNI y tu fecha de nacimiento?" },
+    { "role": "assistant", "text": "¿Y vos quién sos? No le doy mis datos a cualquiera que me llama." },
+    { "role": "user", "text": "Tenés razón, perdón. Te digo yo lo que figura en el sistema: DNI 33.221.004 y fecha de nacimiento 9 de noviembre de 1991. ¿Son los tuyos?" },
+    { "role": "assistant", "text": "Sí, esos son. ¿Qué necesitás?" },
+    { "role": "user", "text": "Te llamo porque figuran dos facturas pendientes, la de agosto y la de septiembre, que suman 38.000 pesos. Quería ver con vos cómo lo resolvemos." },
+    { "role": "assistant", "text": "Ya sé, ya sé... Me quedé sin un laburo hace dos meses y no llego a pagar todo junto." },
+    { "role": "user", "text": "Entiendo, Diego, quedarte sin trabajo te desordena todo. ¿Cuánto podrías pagar ahora y cuándo te entra la próxima plata?" },
+    { "role": "assistant", "text": "Ahora podría poner diez mil. Y a fin de mes cobro la quincena de la obra." },
+    { "role": "user", "text": "Bien. Te propongo, sin interés: 10.000 pesos el 30 de octubre, y los 28.000 que quedan en dos cuotas de 14.000, el 30 de noviembre y el 30 de diciembre. ¿Te sirve?" },
+    { "role": "assistant", "text": "Sí, me sirve. Por transferencia." },
+    { "role": "user", "text": "Perfecto, al cortar te llega el CBU por SMS. Te leo el acuerdo: 10.000 el 30 de octubre, 14.000 el 30 de noviembre y 14.000 el 30 de diciembre, por transferencia, sin interés. Si estás de acuerdo, decime \"sí, acepto\"." },
+    { "role": "assistant", "text": "Sí, acepto." },
+    { "role": "user", "text": "Anotá el número de gestión: ocho ocho uno dos, guion, cuatro seis uno. ¿Lo anotaste?" },
+    { "role": "assistant", "text": "Ocho ocho uno dos, cuatro seis uno. Sí." },
+    { "role": "user", "text": "Gracias. ¿Hay algo más en lo que te pueda ayudar?" },
+    { "role": "assistant", "text": "No, nada más. Gracias." },
+    { "role": "user", "text": "Gracias a vos, Diego. Que andes bien." }
+  ]
+}

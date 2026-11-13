@@ -1101,10 +1101,10 @@ Queremos que el cliente corte sabiendo qué va a pasar, cuándo y con un número
 Los motivos de llamada más comunes: el servicio no anda, dudas o errores en la factura, pedidos de baja y reclamos que se repiten.
 Lo que más valora el cliente: que lo escuchen sin hacerle repetir todo, que le hablen claro y que no le prometan lo que después no pasa.`),
       g("trabajo", `Llamadas entrantes: el operador atiende con el saludo de la campaña ("ConectAR, buen día, te habla (nombre). ¿En qué te puedo ayudar?").
-Llamadas salientes (por ejemplo, cobranzas): el operador se presenta con nombre y empresa y valida que habla con el titular antes de decir para qué llama.
+Llamadas salientes (por ejemplo, cobranzas): el operador se presenta con nombre y empresa y valida que habla con el titular antes de decir para qué llama. Como el cliente no sabe quién lo llama, no se le piden datos: el operador le dice el DNI y la fecha de nacimiento que figuran en el sistema y el cliente confirma si son los suyos.
 Cada grupo de operadores tiene una team leader que escucha llamadas grabadas (monitoreo de calidad) y da feedback.
 Al cortar, el operador tipifica la llamada: registra el motivo en el sistema.`),
-      g("problemas", `1. Saludar y validar la identidad: DNI del titular y fecha de nacimiento, antes de dar o pedir datos de la cuenta.
+      g("problemas", `1. Saludar y validar la identidad antes de dar o pedir datos de la cuenta. Si el cliente llamó, se le piden el DNI del titular y la fecha de nacimiento; si llamamos nosotros, se los decimos y el cliente confirma.
 2. Escuchar el problema completo sin interrumpir y sin hacer repetir lo que ya se dijo.
 3. Preguntar lo necesario para entender (desde cuándo, qué se probó, qué ve el cliente).
 4. Ofrecer la solución que corresponde o la alternativa posible, sin prometer lo que no depende de nosotros.
@@ -1122,6 +1122,7 @@ Si no sabemos algo, lo decimos y averiguamos; no inventamos.`),
 - Cierre con resumen y "¿hay algo más en lo que te pueda ayudar?".
 - Tipificación correcta al cortar.`),
       g("restricciones", `No dar datos de la cuenta ni de deudas a quien no validó ser el titular.
+En las llamadas salientes nunca se le piden al cliente el DNI, la fecha de nacimiento ni otros datos personales: no sabe quién lo llama, y es lo que hacen los estafadores.
 No prometer devoluciones en el momento: Facturación las resuelve en hasta 72 horas hábiles.
 No prometer visitas técnicas "hoy": la primera fecha disponible es en 48 horas hábiles.
 La promoción de retención (30 % por 6 meses) se ofrece una sola vez y solo si tiene sentido para el cliente; no se insiste.
@@ -1131,7 +1132,16 @@ Nunca se amenaza a un cliente (por ejemplo, con el Veraz).`),
 Luz LOS en rojo: no llega la señal de la fibra; no se arregla desde el módem y hace falta una visita técnica.
 Si el cliente ya reinició el módem, no se le pide de nuevo.`),
       p("p-baja", "Pedidos de baja", `Primero se pregunta el motivo. Si tiene sentido, se ofrece una vez la retención.
-Si el cliente sigue decidido, se respeta y se explican los pasos: fecha de la baja, devolución del módem (es en comodato: se lleva a una sucursal o lo pasan a buscar sin costo) y última factura proporcional.`)
+Si el cliente sigue decidido, se respeta y se explican los pasos: fecha de la baja, devolución del módem (es en comodato: se lleva a una sucursal o lo pasan a buscar sin costo) y última factura proporcional.`),
+      p("p-cobranza", "Llamadas de cobranza (guion)", `1. Presentación: "Hola, buen día, te habla (nombre), de ConectAR. ¿Hablo con (nombre del titular)?". Si no es el titular, no se dice para qué se llama: se pregunta cuándo se lo puede encontrar.
+2. Validación, sin pedirle datos: "Para que sepas que te llamamos de ConectAR y confirmar que hablo con vos: en el sistema figura el DNI (número) y la fecha de nacimiento (fecha). ¿Son los tuyos?". Recién con la confirmación se dice el motivo y el monto.
+3. Motivo, sin juzgar: qué facturas están pendientes y cuánto suman.
+4. Escuchar y preguntar qué puede pagar y cuándo, antes de ofrecer nada.
+5. Ofrecer lo que permite la campaña: el pago total o un plan de hasta 3 cuotas sin interés (deudas de hasta 2 facturas). Se acuerda el monto y la fecha de cada pago; la primera cuota vence dentro de los 30 días.
+6. Medios de pago: transferencia (el CBU llega por SMS al cortar), tarjeta de débito o link de pago por WhatsApp.
+7. Conformidad: el operador lee el acuerdo (monto de cada cuota, fechas y medio de pago) y le pide al cliente que diga "sí, acepto". Queda grabado. No se le vuelve a pedir el DNI ni que repita los datos.
+8. Número de gestión: se dicta de a grupos y se confirma que el cliente lo anotó.
+9. Cierre: "¿Hay algo más en lo que te pueda ayudar?" y despedida con el nombre del cliente.`)
     ],
 
     tareaEjemplo: {
@@ -1231,10 +1241,10 @@ Si el cliente sigue decidido, se respeta y se explican los pasos: fecha de la ba
         voz: "masculina",
         cliente: "Diego Sosa, 34 años, albañil. Es el titular de la cuenta.",
         personalidad: "Avergonzado y a la defensiva al principio (\"ya sé, ya sé\"). Perdió un trabajo hace dos meses. Si no lo juzgan y le ofrecen una salida posible, colabora. Si lo presionan o lo amenazan (por ejemplo, con el Veraz), se cierra y dice que no puede pagar nada.",
-        situacion: "Debe dos facturas, 38.000 pesos en total. Atiende el celular en la obra, con ruido de fondo.\nDatos que solo da si le preguntan: a fin de mes le entra plata; puede pagar una parte ahora, pero no todo; prefiere pagar por transferencia.\nSi le hablan de la deuda antes de confirmar que sos el titular, preguntá \"¿y vos cómo sabés que soy yo?\".\nSi te piden validar la identidad: DNI 33.221.004, nacido el 9 de noviembre de 1991.",
-        objetivo: "Presentarse con nombre y empresa, validar que habla con el titular antes de mencionar la deuda, no amenazar ni juzgar, preguntar qué puede pagar y cuándo, ofrecer el plan de pagos (hasta 3 cuotas), acordar fecha y monto y dar el número de gestión.",
-        ficha: "Presentación: decí tu nombre y que llamás de ConectAR.\nAntes de hablar de la deuda: confirmá que hablás con el titular, Diego Sosa, y validá su identidad con DNI y fecha de nacimiento. El sistema te confirma si coinciden.\nEn el sistema: dos facturas impagas (agosto y septiembre), 38.000 pesos en total.\nPodés ofrecer: un plan de pagos de hasta 3 cuotas. Acordá el monto y la fecha de cada pago.\nNo podés: amenazar ni presionar (por ejemplo, con el Veraz).\nAl registrar el acuerdo, el sistema te da el número de gestión: 8812-461.",
-        cierre: "Se resuelve cuando hay un acuerdo de pago con fecha.",
+        situacion: "Debe dos facturas, 38.000 pesos en total. Atiende el celular en la obra, con ruido de fondo.\nDatos que solo da si le preguntan: a fin de mes le entra plata; puede pagar una parte ahora, pero no todo; prefiere pagar por transferencia.\nSi le hablan de la deuda antes de confirmar que sos el titular, preguntá \"¿y vos cómo sabés que soy yo?\".\nTu DNI es 33.221.004 y naciste el 9 de noviembre de 1991. No sabés quién te llama: si te piden el DNI, la fecha de nacimiento u otro dato personal, desconfiá y no los des (\"¿y vos quién sos? No le doy mis datos a cualquiera que me llama\"). Si el operador te los dice y coinciden, confirmá que sos vos.",
+        objetivo: "Presentarse con nombre y empresa, validar que habla con el titular antes de mencionar la deuda (diciéndole el DNI y la fecha de nacimiento para que confirme, sin pedirle datos), no amenazar ni juzgar, preguntar qué puede pagar y cuándo, ofrecer el plan de pagos (hasta 3 cuotas), acordar fecha y monto y dar el número de gestión.",
+        ficha: "Presentación: \"Hola, buen día, te habla (tu nombre), de ConectAR. ¿Hablo con Diego Sosa?\". Si no es el titular, no digas para qué llamás.\nAntes de hablar de la deuda: validá la identidad sin pedirle datos (vos lo llamaste y no sabe quién sos). Decile el DNI y la fecha de nacimiento que figuran en el sistema y pedile que confirme si son los suyos.\nEn el sistema: titular Diego Sosa, DNI 33.221.004, nacido el 9 de noviembre de 1991. Dos facturas impagas (agosto y septiembre), 38.000 pesos en total.\nAntes de ofrecer: preguntá cuánto puede pagar y cuándo.\nPodés ofrecer: el pago total o un plan de pagos de hasta 3 cuotas sin interés. Acordá el monto y la fecha de cada pago; la primera cuota vence dentro de los 30 días.\nMedios de pago: transferencia (el CBU le llega por SMS al cortar), tarjeta de débito o link de pago por WhatsApp.\nPara cerrar el acuerdo: leele el monto de cada cuota, las fechas y el medio de pago, y pedile que diga \"sí, acepto\" (queda grabado). No le vuelvas a pedir el DNI.\nNo podés: amenazar ni presionar (por ejemplo, con el Veraz).\nAl registrar el acuerdo, el sistema te da el número de gestión: 8812-461. Dictalo y confirmá que lo anotó.\nCierre: \"¿Hay algo más en lo que te pueda ayudar?\"",
+        cierre: "Se resuelve cuando hay un acuerdo de pago con fecha y el operador te dio el número de gestión. Si aceptás el acuerdo y no te da ningún número, pedíselo: \"¿me pasás algún número para seguirlo?\".",
         duracion: 6,
         dificultad: "Alta",
         glosario: [
@@ -1264,14 +1274,26 @@ Si el cliente sigue decidido, se respeta y se explican los pasos: fecha de la ba
 
     // Criterios propuestos para RR. HH. Los pesos son iguales y provisorios: los define RR. HH.
     criterios: [
-      { nombre: "Escucha activa", descripcion: "Deja hablar, retoma lo que dijo el cliente y no le hace repetir datos que ya dio.", peso: 1 },
-      { nombre: "Empatía y control emocional", descripcion: "Reconoce el malestar del cliente, mantiene la calma con un cliente enojado y pone límites con respeto.", peso: 1 },
-      { nombre: "Claridad", descripcion: "Habla simple, sin tecnicismos, y confirma que el cliente entendió (números, fechas).", peso: 1 },
-      { nombre: "Procedimiento", descripcion: "Saluda como pide la campaña, valida la identidad antes de hablar de la cuenta, no promete lo que no puede dar y sigue las reglas de la campaña.", peso: 1 },
-      { nombre: "Resolución", descripcion: "Pregunta para entender el problema y ofrece la solución o la alternativa que corresponde.", peso: 1 },
-      { nombre: "Cierre", descripcion: "Resume lo acordado, da el número de gestión, dice qué pasa y cuándo, y pregunta si hay algo más.", peso: 1 }
+      { nombre: "Escucha activa", descripcion: "Deja hablar, retoma lo que dijo el cliente y no le hace repetir datos que ya dio.", peso: 1, indicadores: {
+        cuenta: ["retoma con sus palabras lo que dijo el cliente antes de proponer algo", "usa en lo que propone un dato que dio el cliente (lo que ya probó, cuándo cobra, para qué necesita el servicio)", "deja terminar al cliente antes de hablar"],
+        noCuenta: ["le pide al cliente que repita algo que ya contó", "repite una prueba o una pregunta que el cliente ya respondió", "sigue el guion sin tener en cuenta lo que acaba de decir el cliente"] } },
+      { nombre: "Empatía y control emocional", descripcion: "Reconoce el malestar del cliente, mantiene la calma con un cliente enojado y pone límites con respeto.", peso: 1, indicadores: {
+        cuenta: ["nombra con sus palabras lo que le pasa al cliente (el enojo, el apuro, la preocupación)", "lo que reconoce se nota después en lo que propone o pregunta", "con un cliente enojado o que insulta, mantiene la calma y pone el límite con respeto, como pide la campaña"],
+        noCuenta: ["'quedate tranquilo' o 'no te preocupes' como única respuesta", "juzga o minimiza la situación del cliente", "se pone a la defensiva, discute o culpa a otra área", "cuenta cosas personales que desvían la conversación"] } },
+      { nombre: "Claridad", descripcion: "Habla simple, sin tecnicismos, y confirma que el cliente entendió (números, fechas).", peso: 1, indicadores: {
+        cuenta: ["explica las palabras técnicas que usa (luz LOS, horas hábiles, plan de pagos)", "dice números y fechas concretos: monto de cada cuota, día de la visita, plazo", "confirma que el cliente anotó o entendió los números importantes"],
+        noCuenta: ["usa palabras técnicas o muy formales sin explicarlas", "deja plazos o montos vagos ('en unos días', 'unas cuotas')", "da información que contradice lo que tenía a mano"] } },
+      { nombre: "Procedimiento", descripcion: "Saluda como pide la campaña, valida la identidad antes de hablar de la cuenta, no promete lo que no puede dar y sigue las reglas de la campaña.", peso: 1, indicadores: {
+        cuenta: ["saluda o se presenta con lo que pide la campaña (no hace falta que sea textual)", "valida la identidad antes de dar o pedir datos de la cuenta o de la deuda: si el cliente llamó, pidiéndole DNI y fecha de nacimiento; si llamó el operador, diciéndoselos para que confirme", "respeta los plazos y límites de la campaña (48 o 72 horas hábiles, hasta 3 cuotas, retención una sola vez)", "dice que no sabe y lo averigua en lugar de inventar"],
+        noCuenta: ["menciona la deuda, el saldo o datos de la cuenta antes de validar la identidad", "en una llamada saliente, le pide al cliente el DNI, la fecha de nacimiento u otros datos personales", "promete algo que la campaña no permite (visita hoy, devolución en el momento)", "amenaza o presiona (por ejemplo, con el Veraz)", "inventa condiciones, beneficios o fechas que no estaban en lo que tenía a mano"] } },
+      { nombre: "Resolución", descripcion: "Pregunta para entender el problema y ofrece la solución o la alternativa que corresponde.", peso: 1, indicadores: {
+        cuenta: ["pregunta lo necesario antes de proponer (qué probó, qué ve, cuánto puede pagar y cuándo)", "ofrece la solución o la alternativa que corresponde según lo que tenía a mano", "ajusta la propuesta a lo que contó el cliente"],
+        noCuenta: ["propone sin haber preguntado nada", "ofrece algo que no resuelve lo que el cliente necesita", "insiste con una oferta que el cliente ya rechazó"] } },
+      { nombre: "Cierre", descripcion: "Resume lo acordado, da el número de gestión, dice qué pasa y cuándo, y pregunta si hay algo más.", peso: 1, indicadores: {
+        cuenta: ["resume con sus palabras lo acordado: qué pasa y cuándo (en una cobranza, el monto de cada cuota y las fechas)", "dicta el número de gestión y confirma que el cliente lo anotó", "en una cobranza, le lee el acuerdo y le pide la conformidad ('sí, acepto')", "pregunta si hay algo más en lo que pueda ayudar"],
+        noCuenta: ["corta sin dar el número de gestión", "le pide al cliente que haga el resumen o que repita su DNI en lugar de resumir el operador", "se despide sin decir qué pasa ni cuándo"] } }
     ],
-    notasEvaluacion: "Es el primer trabajo de quien hace la simulación: puede no saber el saludo exacto ni los plazos de la campaña. Valoramos más que escuche, que no prometa lo que no puede y que sea honesto, que la velocidad o el guion perfecto."
+    notasEvaluacion: "Es el primer trabajo de quien hace la simulación: puede no saber el saludo exacto ni los plazos de la campaña. Valoramos más que escuche, que no prometa lo que no puede y que sea honesto, que la velocidad o el guion perfecto.\nValidar la identidad (en las entrantes, pidiendo DNI y fecha de nacimiento; en las salientes, diciéndolos para que el cliente confirme), o pedirle al cliente que diga \"sí, acepto\" al cerrar un acuerdo de pago, son pasos del procedimiento: no cuentan como hacerle repetir datos. El saludo y la presentación no tienen que ser textuales: alcanza con que tengan lo que pide la campaña."
   };
 
   T.EJEMPLOS = {

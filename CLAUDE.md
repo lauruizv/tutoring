@@ -48,7 +48,7 @@ Otras reglas del servidor:
 
 **La evaluación tiene un camino propio (`responderEval`).** Usa su propia cadena (`EVAL_CADENA`, configurable con `LLM_EVAL_CADENA`). Hace una "carrera" (`carreraEval`): si `claude-sdk` no termina en `EVAL_CARRERA_MS`, lanza un segundo intento en paralelo y gana el primer informe válido. El texto no se transmite a medida que llega: `intentar` lo acumula, lo valida con `core.parseEvaluacion` y lo entrega completo. Para Gemini fuerza el JSON con `EVAL_SCHEMA`; si cambiás los campos del informe, actualizá ese esquema, el prompt y el parseo a la vez.
 
-**Código compartido entre navegador y Node.** `public/js/core.js` es UMD: el servidor y los tests lo importan con `require`, y el navegador lo expone en `window.T.core`. Contiene la lógica pura: historial, `extraerJSON`/`parseEvaluacion`, `puntajeCriterio`/`puntajePonderado` (puntaje de 0 a 100 a partir de criterios de 1 a 5; los criterios en `null` quedan fuera) y la migración de la configuración. `prompts.js` y `defaults.js` solo existen en el navegador (`window.T.prompts`, `T.DEFAULTS`). Cuando Node necesita esos archivos, los carga en un contexto `vm` (ver `evals/puente.mjs`).
+**Código compartido entre navegador y Node.** `public/js/core.js` es UMD: el servidor y los tests lo importan con `require`, y el navegador lo expone en `window.T.core`. Contiene la lógica pura: historial, `extraerJSON`/`parseEvaluacion`, `puntajeCriterio`/`puntajePonderado` (puntaje de 0 a 100 a partir de criterios de 1 a 5, con `VALOR_NIVEL`: 1 = 0, 2 = 35, 3 = 65, 4 = 85, 5 = 100; los criterios en `null` quedan fuera) y la migración de la configuración. `prompts.js` y `defaults.js` solo existen en el navegador (`window.T.prompts`, `T.DEFAULTS`). Cuando Node necesita esos archivos, los carga en un contexto `vm` (ver `evals/puente.mjs`).
 
 **Frontend (`public/js/app.js`).** Es una SPA sin framework: `VIEWS[nombre]`, `go()` y el estado en `S`. Al arrancar, `boot()` → `entrar()` pide `/api/yo`; sin sesión muestra `VIEWS.login` (`body.sin-sesion` oculta la barra lateral). El perfil sale del rol de la sesión: ya no hay selector de perfil ni campo de nombre. Cada rol tiene su pantalla de inicio (`INICIO`) y su color (`body[data-rol]`). El `localStorage` se separa por usuario (`k()`). Un 401 `sin_ingreso` en cualquier pedido lleva al ingreso con aviso (`T.api.onSinSesion`). Hay tres perfiles: estudiante (se muestra como "Candidato": simulación por voz e informe), junior (chat con el mentor) y empresa (configura contexto, escenarios y criterios, y ve los informes). El informe se arma en el navegador (`runEvaluation`): prompt de `T.prompts.evaluacion`, `purpose: "eval"`, parseo y puntaje con `core`, y después `POST /api/informes`. El servidor guarda el informe sin tocarlo. Candidato y empresa ven la misma vista (`VIEWS.report`).
 
@@ -81,6 +81,8 @@ Hoy hay 5 casos sintéticos, todos del escenario `incidente-viernes` de Nodo, co
 
 `evals/golden-mkt/` tiene 9 casos sintéticos de los escenarios de call center (empresa de ejemplo `mkt` en `defaults.js`, borrador en `docs/escenarios-mkt.md`) con `esperado: null`. El rango esperado lo decide RR. HH. con `planilla-rrhh.csv` (dos personas por caso), nunca quien escribió los casos ni la IA. `test/mkt.test.mjs` verifica que los casos coincidan con los escenarios.
 
+`evals/calibracion-mkt/` tiene 5 conversaciones sintéticas de la cobranza de MKT, de excelente a falla de compliance, con rangos esperados provisorios puestos por nosotros. Sirven para comprobar que el evaluador ordena bien las llamadas y que seguir el guion de la campaña (`p-cobranza` y la `ficha`) da un puntaje alto. No reemplazan al golden set.
+
 `run_evals.py` corre las transcripciones de `evals/transcripciones/*.json` por el evaluador real. No reimplementa nada: delega en `puente.mjs`, que usa el mismo prompt, el mismo `system` y el mismo `max_tokens` que `app.js` (los lee del código fuente) y el `POST /api/messages` de un servidor levantado. Cada caso trae los rangos esperados por criterio en `esperado`. Los resultados van a `evals/resultados/<AAAAMMDD-HHMMSS>/` (`resumen.csv`, `criterios.csv`, `corridas.csv`, `crudo.jsonl`).
 
 ## Bitácora
@@ -96,6 +98,44 @@ Registro paso a paso de los cambios del programa: qué se decidió, por qué y d
 - **Estado:** `test/precios.test.mjs`, nuevo. `LEEME.md` actualizado con los precios nuevos. `npm test` pasa 160 de 161 y `npm run test:e2e`, 37 de 38. Los dos que fallan (`estáticos: sirve la app y bloquea salir de /public` e `interrumpir al cliente lo corta y pasa a escuchar`) fallan igual sin estos cambios.
 
 ### 2026-11-03 · Log de tokens de la llamada de voz con Gemini Live
+
+### 2026-10-29 · Guion de cobranza, indicadores de MKT y calibración del evaluador (rama `feat/calibrar-mkt`)
+
+- **Qué pasaba:** las simulaciones de cobranza daban entre 17 y 38 puntos. Parte eran errores reales (hablar de la deuda antes de validar, no decir el monto de cada cuota). La otra parte venía de que la campaña no tenía guion: pasos normales de una cobranza, como pedir el "sí, acepto" al final o los medios de pago, el evaluador los contaba como "le hizo repetir datos" o "inventó condiciones".
+- **Qué se hizo:**
+  - Procedimiento nuevo `p-cobranza` (el guion de 9 pasos) y la `ficha` de la cobranza con todo lo que hace falta: cuotas sin interés, primera cuota dentro de los 30 días, medios de pago, lectura del acuerdo con el "sí, acepto", dictado del número y cierre.
+  - Indicadores (`cuenta` / `noCuenta`) para los 6 criterios de MKT, y una aclaración en `notasEvaluacion`: validar la identidad y pedir el "sí, acepto" no cuentan como hacer repetir datos, y el saludo no tiene que ser textual.
+  - `evals/calibracion-mkt/`: 5 cobranzas sintéticas de excelente a falla de compliance.
+  - `data/empresa.json` era idéntico al ejemplo de MKT anterior: se actualizó con el nuevo (había una copia de seguridad en el scratchpad de la sesión).
+- **La frase "se reemplaza cuando MKT nos cuente una real"** es solo un comentario: no cambia ningún criterio. ConectAR (internet y TV) es una campaña típica de un contact center, así que no se recreó el escenario.
+- **Resultados (3 corridas, `evals/resultados/20261029-165117/`):** excelente 74 (71-79), bueno 54, mediocre 28, malo 7 y falla de compliance 1. El orden es correcto y estable. El golden set de MKT (`20261029-165457/`) queda igual que antes, así que los otros escenarios no se rompieron.
+- **Estado:** `npm test` pasa 153 de 153.
+
+### 2026-10-29 · En las llamadas salientes no se le piden datos al cliente (rama `feat/calibrar-mkt`)
+
+- **Qué pasaba:** en la cobranza, el operador le pedía a Diego el DNI y la fecha de nacimiento. En una llamada saliente el cliente no sabe quién lo llama: darle esos datos a un desconocido es justamente lo que buscan las estafas, y no se le debe enseñar a un operador a pedirlos.
+- **Qué cambió (solo salientes; en las entrantes el cliente llamó él y se le siguen pidiendo los datos):**
+  - El operador le dice el DNI y la fecha de nacimiento que figuran en el sistema y el cliente confirma. Está en el contexto (`trabajo`, `problemas`), en una restricción nueva, en el paso 2 del guion `p-cobranza` y en la `ficha` de la cobranza, que ahora muestra el DNI y la fecha.
+  - Diego desconfía si se los piden ("¿y vos quién sos?") y no los da.
+  - Procedimiento tiene un indicador nuevo en contra: pedirle datos personales al cliente en una llamada saliente.
+  - Las llamadas de calibración 01 a 04 validan de la forma nueva, y hay un caso nuevo, `06_pide_datos`.
+- **Advertencia:** si atiende otra persona, escucha los datos completos. La alternativa es decir solo una parte ("tu DNI termina en 004…"); el usuario eligió los datos completos.
+- **Resultados (`evals/resultados/20261029-235040/`, 2 corridas):** excelente 87, bueno 63, mediocre 42, malo 9, falla de compliance 3. El caso que pide los datos saca 80: el evaluador detecta el error y baja Procedimiento a 3, pero no a 1 o 2, porque el operador se corrigió enseguida y el cliente no dio nada. Si MKT lo considera una falta grave aunque se corrija, hay que decirlo en el indicador.
+- **Estado:** `npm test` pasa 155 de 155.
+
+### 2026-10-29 · Escala nueva del puntaje y el cliente ya no corta antes del cierre (rama `feat/calibrar-mkt`)
+
+- **Escala:** siguiendo el guion, una cobranza sacaba 55, y un 55/100 se lee como un fracaso aunque la persona lo haya hecho bien. El 3 del evaluador significa "cumple, lo hace bien", pero valía 50. Ahora cada nivel vale 1 = 0, 2 = 35, 3 = 65, 4 = 85, 5 = 100 (`VALOR_NIVEL` en `core.js`). Lo que se evalúa no cambia, solo cómo se lee el número. Con las corridas de calibración, la excelente pasa de 74 a 84 y la bien hecha, de 54 a 67; las malas casi no cambian (de 7 a 10 y de 1 a 2). Se actualizaron los rangos de `evals/calibracion-mkt/`. Los rangos de `evals/transcripciones/` (Nodo) eran para la escala anterior y falta revisarlos. Los informes ya guardados conservan el puntaje con el que se crearon. **Falta que RR. HH. lo confirme.**
+- **El cliente cortaba antes del cierre:** en las dos cobranzas de prueba, Diego se despedía apenas decía "sí, acepto", porque la regla del escenario era "se resuelve cuando hay un acuerdo de pago con fecha". El candidato no llegaba a dar el número de gestión ni a preguntar si había algo más, y el evaluador le bajaba Cierre o lo dejaba sin puntaje. Ahora la cobranza se resuelve cuando además se dio el número (si no se lo dan, Diego lo pide), y la consigna de voz de todos los clientes dice que, al aceptar un acuerdo, no se despidan en esa misma respuesta. Falta probarlo con la voz real.
+- **Estado:** `npm test` pasa 154 de 154 y `npm run test:e2e`, 38 de 38 (con la escala nueva, el informe de prueba da 81 en lugar de 71).
+
+### 2026-10-27 · Finales de línea: siempre LF
+
+- **Norma:** todos los archivos de texto van con LF. Está al principio de este archivo y la impone `.gitattributes` (`* text=auto eol=lf`).
+- **Qué se encontró:** en git los archivos ya estaban con LF (salvo `CLAUDE.md`, que estaba con CRLF), pero 54 archivos de la carpeta de trabajo habían quedado con CRLF. Los 16 que `git status` marcaba como modificados no tenían ningún cambio real: era solo eso. Se pasaron todos a LF y desaparecieron del `git status`.
+- **Para el PR a GitHub:** en `facu-sanabria/tutoring` algunos archivos están con CRLF (por ejemplo, `server.js`). Si la rama del PR pasa a LF, esos archivos van a aparecer enteros como cambiados. Conviene decidirlo con el equipo: o se hace en un PR aparte, solo de finales de línea, o se suma `.gitattributes` allá también.
+
+### 2026-10-27 · `feat/llamada-realista` unida a `master` y rama lista para el PR a GitHub
 
 - **Para qué:** saber cuántos tokens de entrada y salida gasta una simulación por voz.
 - **Qué hay:** el navegador suma el `usageMetadata` de Gemini Live y al colgar lo manda a `POST /api/voz/uso`; el servidor escribe una línea `[VOZ] gemini-live …` en la terminal y en `data/logs/ia-AAAA-MM-DD.log`. Detalle en la sección Voz de Arquitectura.
