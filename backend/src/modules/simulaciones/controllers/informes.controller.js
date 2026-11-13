@@ -76,8 +76,8 @@ async function porId(req, res, { yo, params }) {
   }
   if (req.method === "DELETE") {
     if (!exigir(res, yo, ["empresa"])) return;
-    try { await service.borrar(id); } catch (_) { return fail(res, 500, "No se pudo eliminar el informe"); }
-    return json(res, 200, { ok: true });
+    const out = await service.borrar(id);
+    return out.error ? fail(res, out.error.status, out.error.message) : json(res, 200, { ok: true });
   }
   return fail(res, 405, "Método no permitido");
 }

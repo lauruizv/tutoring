@@ -2,6 +2,7 @@
 node_modules/
 data/empresa.json
 data/informes/*.json
+data/audios/
 data/logs/
 .playwright-mcp/
 

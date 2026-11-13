@@ -180,7 +180,12 @@ T.api = (function () {
       exportar: (formato, filtro) => descargar("/api/informes/exportar" + consulta(Object.assign({ formato, zona: zonaHoraria() }, filtro))),
       get: id => jsonReq("/api/informes/" + encodeURIComponent(id)),
       save: data => jsonReq("/api/informes", { method: "POST", body: JSON.stringify(data) }),
-      remove: id => jsonReq("/api/informes/" + encodeURIComponent(id), { method: "DELETE" })
+      remove: id => jsonReq("/api/informes/" + encodeURIComponent(id), { method: "DELETE" }),
+      // Audio de la simulación. Solo lo sube quien la hizo, si aceptó que se grabe; devuelve { ok, audio }.
+      subirAudio: (id, blob, duracionSeg) => jsonReq("/api/informes/" + encodeURIComponent(id) + "/audio" + consulta({ duracion: duracionSeg > 0 ? duracionSeg.toFixed(1) : "" }),
+        { method: "PUT", headers: { "content-type": blob.type || "application/octet-stream" }, body: blob }),
+      // El audio completo, para que el informe haga sonar un tramo (ArrayBuffer).
+      audio: async id => (await pedido("/api/informes/" + encodeURIComponent(id) + "/audio")).arrayBuffer()
     }
   };
 })();

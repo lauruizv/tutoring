@@ -2,6 +2,7 @@ const { PROVIDERS, PRIMARY, FALLBACK } = require("../../shared/llm/providers.con
 const { estadoIA, probarProveedor } = require("../../shared/llm/estado");
 const { resumenUso } = require("../../shared/llm/uso");
 const { VOICE } = require("../../shared/voz/voice.config");
+const { AUDIO_DIAS } = require("../../config/limits");
 
 // Configuración pública (nunca incluye una API key)
 async function config() {
@@ -9,7 +10,8 @@ async function config() {
   const act = PROVIDERS[ia.activo || PRIMARY];
   return {
     hasKey: Boolean(ia.activo), provider: act.id, providerName: act.detalle, keyVar: act.keyVar,
-    problema: ia.problema, models: act.models, ia, voice: VOICE
+    problema: ia.problema, models: act.models, ia, voice: VOICE,
+    audio: { dias: AUDIO_DIAS }   // cuánto se guarda la grabación: lo dice el texto que acepta el candidato
   };
 }
 

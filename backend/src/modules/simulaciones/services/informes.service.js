@@ -4,11 +4,10 @@ const crypto = require("crypto");
 const { isObj } = require("../../../shared/utils/validacion");
 const repo = require("../repositories/informes.repository");
 const { exportarInformes } = require("../exportar");
+const { loVe, alcanceDe } = require("../informes/permisos");
+const { consentimientoDe } = require("../informes/audio-reglas");
+const audios = require("./audios.service");
 
-// La empresa ve todos los informes; estudiante y junior, solo los suyos.
-// `loVe` decide sobre un informe; `alcanceDe` dice lo mismo para una lista (ver el repositorio).
-const loVe = (yo, r) => yo.rol === "empresa" || (Boolean(r.usuarioId) && r.usuarioId === yo.id);
-const alcanceDe = yo => (yo.rol === "empresa" ? { todos: true } : { usuarioId: yo.id });
 
 // Resúmenes de los informes que `yo` puede ver y que pasan el filtro (ver informes/filtro.js).
 const listar = (yo, filtro) => repo.listarResumenes(filtro, alcanceDe(yo));
@@ -31,6 +30,13 @@ async function crear(r, yo) {
   if (!yo.local) { r.candidato = yo.nombre; r.usuarioId = yo.id; }
   if (typeof r.candidato !== "string" || !r.candidato.trim()) return { error: { status: 400, message: "El informe no tiene candidato." } };
   if (!isObj(r.evaluacion)) return { error: { status: 400, message: "El informe no trae la evaluación." } };
+  // La aceptación de la grabación queda con la fecha del servidor. El dato del audio no lo manda el navegador:
+  // lo anota el servidor recién cuando llega el archivo (ver audios.service.js).
+  if ("consentimientoAudio" in r) {
+    const consentimiento = consentimientoDe(r.consentimientoAudio);
+    if (consentimiento) r.consentimientoAudio = consentimiento; else delete r.consentimientoAudio;
+  }
+  delete r.audio;
   r.id = crypto.randomUUID();
   if (!r.fecha) r.fecha = new Date().toISOString();
   try { await repo.guardar(r); }
@@ -45,6 +51,14 @@ async function obtener(id, yo, sinPermiso) {
   return loVe(yo, r) ? { informe: r } : { error: { status: 403, message: sinPermiso } };
 }
 
-const borrar = id => repo.borrar(id);
+// Devuelve {} o { error: { status, message } }.
+// Primero el audio: si algo falla a la mitad, que no quede una grabación sin su informe.
+async function borrar(id) {
+  try { await audios.borrarDe(id); }
+  catch (_) { return { error: { status: 500, message: "No se pudo eliminar el audio del informe" } }; }
+  try { await repo.borrar(id); }
+  catch (_) { return { error: { status: 500, message: "No se pudo eliminar el informe" } }; }
+  return {};
+}
 
 module.exports = { listar, opciones, exportar, crear, obtener, borrar };

@@ -17,10 +17,12 @@ const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // sinUsuarios: arranca con la carpeta de datos vacía (el servidor crea las cuentas de prueba) y entra como empresa-demo.
 // sinIngreso: no inicia sesión al arrancar (para cuando no hay con qué cuenta entrar).
-export async function startApp({ provider = "gemini", key = "clave-de-prueba", env = {}, sinUsuarios = false, sinIngreso = false } = {}) {
+// sembrar(dataDir): deja archivos en la carpeta de datos antes de que arranque el servidor (para probar lo que hace al arrancar).
+export async function startApp({ provider = "gemini", key = "clave-de-prueba", env = {}, sinUsuarios = false, sinIngreso = false, sembrar = null } = {}) {
   const fake = await startFakeLLM();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "tutoring-test-"));
   fs.mkdirSync(path.join(dataDir, "informes"), { recursive: true });
+  if (sembrar) sembrar(dataDir);
   let codigoNuevo = null;
   if (!sinUsuarios) {
     const auth = crearAuth(dataDir);
@@ -122,6 +124,21 @@ export async function pedir(base, ruta, opts = {}) {
   let cuerpo = texto;
   try { cuerpo = JSON.parse(texto); } catch (_) {}
   return { status: res.status, cuerpo, texto, headers: res.headers };
+}
+
+// Como pedir, pero para archivos: manda `bytes` tal cual (con su `tipo`) y devuelve la respuesta como Buffer.
+// Si la respuesta es un error en JSON, también viene en `cuerpo`.
+export async function pedirBytes(base, ruta, opts = {}) {
+  const { cookie: _c, bytes, tipo, ...resto } = opts;
+  const res = await fetch(base + ruta, {
+    ...resto,
+    headers: { ...(tipo ? { "content-type": tipo } : {}), ...conSesion(base, opts), ...(opts.headers || {}) },
+    body: bytes
+  });
+  const contenido = Buffer.from(await res.arrayBuffer());
+  let cuerpo = null;
+  try { cuerpo = JSON.parse(contenido.toString("utf8")); } catch (_) {}
+  return { status: res.status, bytes: contenido, cuerpo, headers: res.headers };
 }
 
 // Junta el texto de un streaming de /api/messages, como hace public/js/api.js.

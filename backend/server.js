@@ -16,6 +16,8 @@ const { verificarSesionClaude } = require("./src/shared/llm/providers/claude-sdk
 const { VOICE } = require("./src/shared/voz/voice.config");
 const { sinSecretos } = require("./src/shared/utils/secretos");
 const { auth } = require("./src/modules/auth/sesion");
+const audios = require("./src/modules/simulaciones/services/audios.service");
+const { AUDIO_DIAS } = require("./src/config/limits");
 const { crearApp } = require("./src/app");
 const { handleApi } = require("./src/routes");
 const PORT_ENV = env("PORT");
@@ -55,6 +57,10 @@ process.on("SIGTERM", () => {
 
 server.listen(PORT, HOST, () => {
   console.log(`\n  Tutoring corriendo en  http://localhost:${server.address().port}\n`);
+  audios.programarLimpieza({
+    avisar: n => console.log(`  Audios de simulaciones: se borraron ${n} (vencidos a los ${AUDIO_DIAS} días o sin informe).`),
+    fallo: e => console.error("  No se pudieron limpiar los audios vencidos:", sinSecretos((e && e.message) || e))
+  });
   console.log(`  IA principal: ${descProv(PRIMARY)}`);
   console.log(`  IA de respaldo: ${FALLBACK ? descProv(FALLBACK) : "ninguna (LLM_FALLBACK vacío)"}`);
   console.log(`  Evaluación: ${EVAL_CADENA.map(id => PROVIDERS[id].detalle).join(" → ")}${EVAL_CADENA[0] === "claude-sdk" ? ` · intento en paralelo a los ${Math.round(T_EVAL_CARRERA / 1000)}s si Claude no terminó` : ""}`);

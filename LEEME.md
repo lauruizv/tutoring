@@ -135,13 +135,14 @@ backend/src/config/     .env, rutas de carpetas y límites
 backend/src/shared/     lo común: cadena de IA (llm/), HTTP (http/), voz (voz/), utilidades
 backend/src/modules/    auth, ia, empresa, simulaciones y mentor; cada uno con routes/controller/service/repository
 .env                    API key y configuración
-data/                   configuración de la empresa e informes (se crean solos)
+data/                   configuración de la empresa, informes y audios de las simulaciones (se crean solos)
 public/index.html
 public/css/styles.css
 public/js/core.js       lógica pura y testeable (historial, evaluación, puntaje, voz)
 public/js/defaults.js   empresa de ejemplo (Nodo Software)
 public/js/prompts.js    instrucciones que recibe la IA en cada modo
 public/js/voice.js      motor de voz (Gemini Live, Vapi o navegador)
+public/js/grabadora.js  grabación de la simulación (si el candidato acepta) y reproductor de fragmentos en el informe
 public/js/api.js        llamadas al servidor
 public/js/app.js        interfaz
 test/                   pruebas automatizadas y utilidades de prueba
@@ -188,6 +189,18 @@ Hay tres motores con la misma interfaz (la app no cambia):
 | `browser` | Voz del navegador (Chrome/Edge). Por turnos: hablás, pausa, contesta | Gratis |
 
 Si el motor elegido no está configurado (falta su key), la app usa el siguiente que sí lo esté (Gemini Live → Vapi → navegador) y lo avisa en la pantalla previa a la llamada. Si falla al conectar (key inválida, cuota agotada, sin crédito, sin internet), la llamada muestra el motivo y un botón **Seguir con otra voz**.
+
+### Grabación de la simulación
+
+Con Gemini Live, el brief le ofrece al candidato grabar la llamada con una casilla que arranca sin marcar. Si acepta, se graban su voz y la del cliente en un solo archivo comprimido (alrededor de 1 MB cada 5 minutos) y en el informe aparece un botón junto a cada cita para escuchar ese momento. Si no acepta, la simulación y el informe funcionan igual, sin audio.
+
+- En el informe queda guardado qué texto leyó, si aceptó y cuándo.
+- El audio lo escuchan el candidato que hizo la simulación y la empresa. Nadie más.
+- Se guarda en `data/audios/` y se borra al borrar el informe, o solo a los 90 días.
+- Con Vapi o con la voz del navegador no se ofrece: no se graba nada.
+- Mientras suena el teléfono no se graba, y con el micrófono silenciado tampoco se graba la voz del candidato.
+
+El texto de la casilla conviene que lo revise un abogado antes de usar la app con candidatos reales (la voz es un dato personal).
 
 ### Gemini Live: cómo activarlo
 

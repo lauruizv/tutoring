@@ -90,6 +90,9 @@ function crearRepositorioArchivos(carpeta) {
       catch (e) { if (e.code !== "ENOENT") throw e; }
     },
 
+    // Todos los informes enteros (lo usa la limpieza de audios). Para las listas, usar listarResumenes.
+    listarTodos: todos,
+
     // Resúmenes que pasan el filtro, del más nuevo al más viejo.
     async listarResumenes(filtro, alcance) {
       return (await resumenes(alcance)).filter(r => cumple(r, filtro)).sort(masNuevoPrimero);

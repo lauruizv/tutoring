@@ -1163,7 +1163,8 @@ registerProcessor("mic-pcm", MicPcm);`;
       salida = ctx.createGain();
       analizador = ctx.createAnalyser(); analizador.fftSize = 512;
       salida.connect(analizador);
-      telefono(ctx, analizador, opts.telefono !== false).connect(ctx.destination);
+      const haciaLosParlantes = telefono(ctx, analizador, opts.telefono !== false);
+      haciaLosParlantes.connect(ctx.destination);
       // Salida y micrófono elegidos en la prueba de audio del brief; si ya no están, los del sistema.
       if (opts.salida && ctx.setSinkId) ctx.setSinkId(opts.salida).catch(() => {});
       const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
@@ -1189,10 +1190,14 @@ registerProcessor("mic-pcm", MicPcm);`;
         finDeAudioMandado = false;
         mandar({ realtimeInput: { audio: { data: aBase64(e.data.pcm), mimeType: "audio/pcm;rate=" + GL_ENTRADA_HZ } } });
       };
-      ctx.createMediaStreamSource(media).connect(nodoMic);
+      const fuenteMic = ctx.createMediaStreamSource(media);
+      fuenteMic.connect(nodoMic);
       // El worklet tiene que estar conectado a algo para que el navegador lo haga correr; sale en silencio.
       const mudo = ctx.createGain(); mudo.gain.value = 0;
       nodoMic.connect(mudo); mudo.connect(ctx.destination);
+      // Si el candidato aceptó que se grabe, la grabadora recibe lo mismo que suena en la llamada:
+      // su micrófono y la voz del cliente como sale por los parlantes. El motor no sabe cómo se graba.
+      if (opts.grabadora) opts.grabadora.conectar(ctx, { mic: fuenteMic, cliente: haciaLosParlantes });
     }
     function animarNivel() {
       const buf = new Uint8Array(512);
@@ -1211,6 +1216,8 @@ registerProcessor("mic-pcm", MicPcm);`;
       tick();
     }
     function liberar() {
+      // Antes de cerrar el audio: si se cierra primero, la grabadora pierde el último tramo y queda colgada.
+      if (opts.grabadora) opts.grabadora.terminar();
       clearTimeout(setupTimer); clearTimeout(finTimer);
       informarUso();
       cancelAnimationFrame(raf); raf = 0;
@@ -1273,6 +1280,7 @@ registerProcessor("mic-pcm", MicPcm);`;
 
     this.setMuted = function (m) {
       muted = Boolean(m) || !media;
+      if (opts.grabadora) opts.grabadora.micAbierto(!muted);   // con el micrófono silenciado tampoco se graba esa voz
       // Avisamos que se cortó el audio para que Gemini no se quede esperando el final de la frase.
       if (muted && !finDeAudioMandado && conectado) { finDeAudioMandado = true; mandar({ realtimeInput: { audioStreamEnd: true } }); }
     };

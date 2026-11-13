@@ -3,7 +3,7 @@ const { isObj } = require("../utils/validacion");
 // ---------- helpers ----------
 // Lee el cuerpo con tope de tamaño. Si se pasa, sigue descartando lo que llega para poder
 // contestarle 413 al cliente (si cortamos el socket, el navegador solo ve "conexión perdida").
-function readBody(req, limit) {
+function readBuffer(req, limit) {
   return new Promise((resolve, reject) => {
     let size = 0, done = false, over = false; let chunks = [];
     const fin = fn => (...a) => { if (!done) { done = true; fn(...a); } };
@@ -18,11 +18,13 @@ function readBody(req, limit) {
       }
       chunks.push(c);
     });
-    req.on("end", () => (over ? tooLarge() : ok(Buffer.concat(chunks).toString("utf8"))));
+    req.on("end", () => (over ? tooLarge() : ok(Buffer.concat(chunks))));
     req.on("aborted", () => bad(Object.assign(new Error("aborted"), { code: "aborted" })));
     req.on("error", bad);
   });
 }
+// El cuerpo como texto (los pedidos JSON). Los archivos, como el audio, se leen con readBuffer.
+const readBody = async (req, limit) => (await readBuffer(req, limit)).toString("utf8");
 
 // Lee el cuerpo como objeto JSON. Devuelve null y ya respondió el error si algo falla.
 async function bodyObject(req, res, limit, queHacia) {
@@ -37,4 +39,4 @@ async function bodyObject(req, res, limit, queHacia) {
   if (!isObj(obj)) { fail(res, 400, "El pedido tiene que ser un objeto JSON."); return null; }
   return obj;
 }
-module.exports = { readBody, bodyObject };
+module.exports = { readBuffer, readBody, bodyObject };
