@@ -97,6 +97,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await page.locator("#startCall").click();
     await atenderEn(page);
     await esperarVista("Llamada en curso");
+    assert.equal(await page.locator('button[aria-label="Lo que tenés a mano"]').count(), 0, "sin ficha en el escenario no hay botón");
     // El cliente simulado abre la conversación.
     await page.waitForFunction(() => /dos mensajes por cada turno/.test(document.querySelector(".caption").textContent), null, { timeout: 15000 });
 
@@ -399,8 +400,45 @@ describe("ejemplo MKT Contact Center", { skip: saltear }, () => {
     const brief = await page.locator(".brief").innerText();
     assert.match(brief, /lo que tenés a mano/i);
     assert.match(brief, /38\.000/, "el monto de la deuda está antes de llamar");
-    assert.match(brief, /DNI y fecha de nacimiento/);
-    assert.doesNotMatch(brief, /\d{1,2}\.\d{3}\.\d{3}/, "el DNI del cliente no: se lo tiene que pedir");
+    assert.match(brief, /DNI y la fecha de nacimiento/);
+    assert.match(brief, /33\.221\.004/, "en la saliente el operador ve el DNI: se lo dice al cliente para que confirme");
+    await page.locator("button", { hasText: "Volver" }).click();
+    await page.locator(".card", { hasText: "Hace dos días que no tengo internet" }).click();
+    assert.doesNotMatch(await page.locator(".brief").innerText(), /\d{1,2}\.\d{3}\.\d{3}/, "en la entrante el DNI no: se lo tiene que pedir");
+  });
+
+  test("durante la llamada, \"Lo que tenés a mano\" se abre, copia un dato, se cierra con Esc y recuerda cómo quedó", async () => {
+    const ctx = await browser.newContext({ locale: "es-AR", permissions: ["clipboard-read", "clipboard-write"] });
+    const page = await ctx.newPage();
+    await ingresarEn(page, app.base, "estudiante1");
+    const llamar = async () => {
+      await page.locator(".card", { hasText: "Llamada de cobranza" }).click();
+      await page.locator("#startCall").click();
+      await atenderEn(page);
+    };
+    await llamar();
+    const boton = page.locator('button[aria-label="Lo que tenés a mano"]');
+    const panel = page.locator(".ficha-panel");
+    await boton.waitFor();
+    assert.ok(await panel.isHidden(), "arranca cerrado");
+
+    await boton.click();
+    assert.equal(await boton.getAttribute("aria-expanded"), "true");
+    assert.match(await panel.innerText(), /38\.000/, "el monto de la deuda está a mano durante la llamada");
+    await panel.locator("li", { hasText: "8812-461" }).locator("button.copiar").click();
+    assert.match(await page.evaluate(() => navigator.clipboard.readText()), /8812-461/, "copia el número de gestión");
+
+    await page.keyboard.press("Escape");
+    assert.ok(await panel.isHidden(), "Esc lo cierra");
+    assert.equal(await boton.getAttribute("aria-expanded"), "false");
+
+    // Abierto al salir: en la próxima llamada arranca abierto.
+    await boton.click();
+    await page.goto(app.base);
+    await llamar();
+    await panel.waitFor();
+    assert.ok(await panel.isVisible(), "recuerda que lo dejó abierto");
+    await ctx.close();
   });
 
   test("si los escenarios se cargaron antes de que existiera \"Lo que tenés a mano\", igual aparece", async () => {

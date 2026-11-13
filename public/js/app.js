@@ -39,6 +39,11 @@
   const firstName = n => (n || "").split(/\s+/)[0] || n;
   const enPersona = e => T.prompts.enPersona(e);
   const clientName = e => (e.cliente || "El cliente").split(",")[0].trim();
+  // "Lo que tenés a mano" (campo `ficha` del escenario): una línea por dato, con "Título: texto" opcional.
+  const fichaItems = e => String((e && e.ficha) || "").split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const m = l.match(/^([^:"]{2,40}):\s*(.+)$/);
+    return m ? { titulo: m[1], texto: m[2] } : { titulo: "", texto: l };
+  });
   // Quién arranca la llamada (ver prompts.js): "atiende" = entrante, "llama" = saliente.
   const INICIO_LLAMADA = {
     atiende: { brief: "Llamada entrante: cuando arranca, atendés vos y saludás primero.", espera: "Atendiste la llamada: saludá vos primero" },
@@ -62,6 +67,7 @@
     check: '<circle cx="10" cy="10" r="7"/><path d="M7 10l2 2 4-4"/>',
     chevron: '<path d="M5 8l5 5 5-5"/>',
     x: '<path d="M5 5l10 10M15 5 5 15"/>',
+    copy: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"/>',
     mic: '<rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5"/>',
     micOff: '<path d="M3 3l14 14"/><path d="M7 7v2.5a3 3 0 0 0 5 2.2M13 9V5.5a3 3 0 0 0-5.8-1"/><path d="M4.5 9.5a5.5 5.5 0 0 0 9 4.2M15.5 9.5c0 .6-.1 1.2-.3 1.7M10 15v2.5"/>',
     keyboard: '<rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8h1M8.5 8h1M11.5 8h1M14.5 8h0M6 12h8"/>',
@@ -261,6 +267,20 @@
   // ------------------------------------------------------------------
   // ESTUDIANTE: antes de la llamada
   // ------------------------------------------------------------------
+  // Lista de "Lo que tenés a mano". En la llamada (copiar: true), cada dato tiene su botón para copiarlo.
+  function fichaLista(items, { copiar = false } = {}) {
+    return h("ul", { class: copiar ? "tips ficha-lista" : "tips" }, ...items.map(it => {
+      const dato = [it.titulo ? h("b", { text: it.titulo + ": " }) : null, it.texto];
+      if (!copiar) return h("li", null, ...dato);
+      return h("li", null, h("span", null, ...dato),
+        h("button", { class: "copiar", type: "button", title: "Copiar", "aria-label": `Copiar: ${it.titulo || it.texto.slice(0, 40)}`, onclick: () => copiarTexto(it.texto) }, icon("copy")));
+    }));
+  }
+  async function copiarTexto(texto) {
+    try { await navigator.clipboard.writeText(texto); toast("Copiado."); }
+    catch (_) { toast("El navegador no dejó copiar: seleccioná el texto a mano."); }
+  }
+
   VIEWS.brief = view => {
     const e = S.cfg.escenarios.find(x => x.id === S.params.id);
     if (!e) return go("sims");
@@ -271,13 +291,9 @@
     col.append(h("div", { class: "info" },
       h("div", null, h("div", { class: "eyebrow", text: "Con quién hablás" }), h("p", { text: e.cliente }))));
     // Lo que un operador ve en el sistema y las reglas de la campaña: sin esto no sabe qué ofrecer ni qué validar.
-    const ficha = String(e.ficha || "").split("\n").map(l => l.trim()).filter(Boolean);
+    const ficha = fichaItems(e);
     if (ficha.length) col.append(h("div", { class: "info una" },
-      h("div", null, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }),
-        h("ul", { class: "tips" }, ...ficha.map(l => {
-          const m = l.match(/^([^:"]{2,40}):\s*(.+)$/);
-          return m ? h("li", null, h("b", { text: m[1] + ": " }), m[2]) : h("li", { text: l });
-        })))));
+      h("div", null, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }), fichaLista(ficha))));
     if (e.glosario && e.glosario.length) col.append(h("div", { class: "info" },
       h("div", null, h("div", { class: "eyebrow", text: "Palabras que vas a escuchar" }),
         h("ul", { class: "tips" }, ...e.glosario.map(g => h("li", null, h("b", { text: g.termino + ": " }), g.significa))))));
@@ -459,6 +475,13 @@
     const kbBtn = h("button", { class: "round", "aria-label": "Escribir en vez de hablar", "aria-pressed": "false", "aria-expanded": "false", title: "Escribir en vez de hablar" }, icon("keyboard"));
     const txBtn = h("button", { class: "round", "aria-label": "Ver transcripción", "aria-pressed": "false", title: "Ver transcripción" }, icon("list"));
     const hang = h("button", { class: "hang", id: "hang" }, icon("hangup"), enPersona(e) ? "Terminar" : "Colgar");
+    // "Lo que tenés a mano" durante la llamada: los datos del brief, que nadie retiene con solo leerlos antes.
+    const ficha = fichaItems(e);
+    const fichaPanel = ficha.length ? h("aside", { class: "ficha-panel", id: "fichaPanel", hidden: true, "aria-label": "Lo que tenés a mano" },
+      h("div", { class: "ficha-head" }, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }),
+        h("button", { class: "cerrar", type: "button", title: "Cerrar", "aria-label": "Cerrar lo que tenés a mano", onclick: () => mostrarFicha(false) }, icon("x"))),
+      fichaLista(ficha, { copiar: true })) : null;
+    const fichaBtn = fichaPanel ? h("button", { class: "round", "aria-label": "Lo que tenés a mano", "aria-expanded": "false", "aria-controls": "fichaPanel", title: "Lo que tenés a mano", onclick: () => mostrarFicha(fichaPanel.hidden) }, icon("reports")) : null;
     // Llamada por teléfono con un cliente: suena el timbre y el candidato atiende con un botón (entrante),
     // o escucha el tono de llamada hasta que el cliente atiende (saliente, "llama").
     const porTelefono = !enPersona(e) && !T.prompts.esLider(e);
@@ -478,10 +501,27 @@
     const llamada = h("div", { class: sonando ? "call sonando" : "call" },
       h("div", { class: "call-top" }, h("div", { class: "who" }, h("b", { text: cName }), h("span", { text: e.titulo })), timer),
       h("div", { class: "stage" }, orb, stateLbl, sonando ? atender : null, cap, capU, note),
-      h("div", { class: "controls" }, micBtn, hang, kbBtn, txBtn),
-      typebar, txList);
+      h("div", { class: "controls" }, micBtn, hang, kbBtn, txBtn, fichaBtn),
+      typebar, txList, fichaPanel);
     view.append(llamada);
     const yaAtendio = () => { sonando = false; llamada.classList.remove("sonando"); atender.remove(); };
+
+    // Abierto o cerrado queda guardado por usuario: si lo usó en la llamada anterior, arranca abierto.
+    function mostrarFicha(abrir) {
+      if (!fichaPanel) return;
+      fichaPanel.hidden = !abrir;
+      llamada.classList.toggle("con-ficha", abrir);
+      fichaBtn.classList.toggle("on", abrir);
+      fichaBtn.setAttribute("aria-expanded", String(abrir));
+      store.set(k("fichaAbierta"), abrir);
+      if (!abrir && fichaPanel.contains(document.activeElement)) fichaBtn.focus();
+    }
+    if (fichaPanel) {
+      if (store.get(k("fichaAbierta"), false)) mostrarFicha(true);
+      const alEsc = ev => { if (ev.key === "Escape" && !fichaPanel.hidden) mostrarFicha(false); };
+      document.addEventListener("keydown", alEsc);
+      S.alSalirDeVista = () => document.removeEventListener("keydown", alEsc);
+    }
 
     function addTx(role, text) {
       turns.push({ role, text });

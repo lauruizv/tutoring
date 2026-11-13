@@ -169,6 +169,18 @@ h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.01em}
 .hang svg{width:18px;height:18px;stroke:#fff;fill:none;stroke-width:2}
 .typebar{display:flex;gap:8px;width:100%;max-width:600px;margin-top:4px}
 .typebar input{flex:1;border:1px solid var(--line-2);border-radius:12px;padding:10px 12px;background:#FBFAFD}
+/* "Lo que tenés a mano" durante la llamada: columna a la derecha (en pantallas chicas, hoja desde abajo). */
+.call{position:relative}
+.call.con-ficha{padding-right:316px}
+.ficha-panel{position:absolute;top:44px;right:0;bottom:10px;width:300px;overflow-y:auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.call.sonando .ficha-panel{display:none}
+.call.sonando.con-ficha{padding-right:0}
+.ficha-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.ficha-head .cerrar,.ficha-lista .copiar{width:28px;height:28px;border-radius:8px;display:inline-grid;place-items:center;color:var(--muted);flex:none}
+.ficha-head .cerrar:hover,.ficha-lista .copiar:hover{background:var(--soft);color:var(--text)}
+.ficha-head svg,.ficha-lista .copiar svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+.ficha-lista{list-style:none;padding-left:0;gap:10px;color:var(--text);font-size:13.5px}
+.ficha-lista li{display:grid;grid-template-columns:1fr auto;gap:6px;align-items:start}
 .transcript{width:100%;max-width:640px;border-top:1px solid var(--line);margin-top:16px;padding-top:14px;display:flex;flex-direction:column;gap:10px}
 .transcript .ln{font-size:14px}
 .transcript .ln b{font-weight:600;margin-right:6px}
@@ -299,6 +311,8 @@ details.tx .transcript{border:0;margin-top:8px;padding-top:0;max-width:none}
   .crit-head{display:none}
   .ask{font-size:24px}.hello{font-size:21px}
   .orb.big{width:130px;height:130px}
+  .call.con-ficha{padding-right:0}
+  .ficha-panel{position:fixed;inset:auto 0 0 0;width:auto;max-height:60vh;border-radius:16px 16px 0 0;z-index:15;box-shadow:0 -10px 30px -20px rgba(0,0,0,.4)}
 }
 /* Teléfonos angostos (hasta 430 px): que nada se desborde ni se salga de la pantalla. */
 @media (max-width:430px){

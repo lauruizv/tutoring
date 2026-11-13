@@ -64,7 +64,7 @@ Otras reglas del servidor:
 
 **Costo de una simulación completa.** Cuando están la llamada y su informe, el log suma una línea `[SIM] #pedido simulación · llamada US$… + informe US$… = total US$…`. El navegador genera un id por llamada (`S.simulacion` en `VIEWS.call`) y lo manda en `/api/voz/uso` y en la evaluación (`simulacion`, no llega al proveedor); `shared/utils/costo-simulacion.js` los une en memoria, en cualquier orden, y dos horas después descarta lo que quedó sin par. El informe suma todos sus intentos con tokens, incluidos los fallidos y los del Reintentar; un intento cancelado no informa tokens y no suma. Una llamada sin informe (muy corta) no tiene línea `[SIM]`, y tampoco los motores `vapi` y `browser`, que no informan tokens. `npm run costos` agrega `[SIM]` a logs viejos uniendo por hora (±5 s).
 
-**Llamada por teléfono (`VIEWS.call` en `app.js`).** En los escenarios por teléfono con un cliente (no en persona ni con el líder) suena un timbre (`T.voice.tono`, generado con Web Audio) y el candidato toca **Atender**; mientras suena, la pantalla muestra solo ese botón, al centro (`.call.sonando`). Si `inicio` es `"atiende"`, el motor conecta mientras suena, con el micrófono silenciado, y el botón se habilita cuando la voz está lista. Si habla primero el cliente, el motor arranca al atender. En las salientes (`"llama"`) el candidato toca **Llamar** y suena el tono de llamada hasta que el cliente empieza a hablar. Con la voz telefónica, al conectarse suena un ruido de línea suave de fondo (`T.voice.linea`). Con Gemini Live, la voz del cliente pasa por un filtro telefónico (`telefono()` en `voice.js`) salvo que `cfg.vozTelefonica` sea `false`. El acento rioplatense lo sostiene la sección "TU ACENTO" de `prompts.js` y la renovación de la sesión de Gemini Live cada 2 minutos (`quizasRenovar` en `voice.js`, en un silencio y sin corte); describe el sonido sin escribir las palabras como suenan, porque si no la transcripción sale con "sho" (`core.textoHablable` corrige lo que se cuele). Antes de la llamada, el brief tiene una prueba de audio (`pruebaDeAudio` en `app.js`): micrófono, salida, nivel y sonido de prueba; lo elegido queda en `S.audio` y lo usa Gemini Live. Lo que la vista deja abierto se cierra en `render()` con `S.alSalirDeVista`.
+**Llamada por teléfono (`VIEWS.call` en `app.js`).** En los escenarios por teléfono con un cliente (no en persona ni con el líder) suena un timbre (`T.voice.tono`, generado con Web Audio) y el candidato toca **Atender**; mientras suena, la pantalla muestra solo ese botón, al centro (`.call.sonando`). Si `inicio` es `"atiende"`, el motor conecta mientras suena, con el micrófono silenciado, y el botón se habilita cuando la voz está lista. Si habla primero el cliente, el motor arranca al atender. En las salientes (`"llama"`) el candidato toca **Llamar** y suena el tono de llamada hasta que el cliente empieza a hablar. Con la voz telefónica, al conectarse suena un ruido de línea suave de fondo (`T.voice.linea`). Con Gemini Live, la voz del cliente pasa por un filtro telefónico (`telefono()` en `voice.js`) salvo que `cfg.vozTelefonica` sea `false`. El acento rioplatense lo sostiene la sección "TU ACENTO" de `prompts.js` y la renovación de la sesión de Gemini Live cada 2 minutos (`quizasRenovar` en `voice.js`, en un silencio y sin corte); describe el sonido sin escribir las palabras como suenan, porque si no la transcripción sale con "sho" (`core.textoHablable` corrige lo que se cuele). Antes de la llamada, el brief tiene una prueba de audio (`pruebaDeAudio` en `app.js`): micrófono, salida, nivel y sonido de prueba; lo elegido queda en `S.audio` y lo usa Gemini Live. Lo que la vista deja abierto se cierra en `render()` con `S.alSalirDeVista`. Si el escenario tiene `ficha`, durante la llamada un botón abre "Lo que tenés a mano" (`.ficha-panel`: columna a la derecha; en pantallas chicas, hoja desde abajo), con un botón para copiar cada dato. Se cierra con Esc y queda abierto o cerrado por usuario (`k("fichaAbierta")`). El brief y la llamada arman la lista con las mismas funciones (`fichaItems` y `fichaLista`).
 
 **Caché de prompts.** El prompt del mentor está ordenado para que la parte estable vaya primero (`system_estable` indica hasta dónde). `test/prompts.test.mjs` compara contra `test/fixtures/prompts-antes.js` que el texto que recibe el modelo no cambie. Si modificás `prompts.js` a propósito, actualizá ese fixture.
 
@@ -89,6 +89,16 @@ Hoy hay 5 casos sintéticos, todos del escenario `incidente-viernes` de Nodo, co
 
 Registro paso a paso de los cambios del programa: qué se decidió, por qué y dónde está el detalle. Se actualiza en cada paso, con el más nuevo arriba. Cuando algo se implementa, se describe también en la sección de arquitectura que corresponda.
 
+### 2026-11-11 · "Lo que tenés a mano" durante la llamada (rama `feat/ficha-en-llamada`)
+
+- **Qué pasaba:** el candidato leía la `ficha` en el brief y, al empezar la llamada, desaparecía. Datos como el monto, el DNI o el número de gestión no se retienen leyéndolos una vez.
+- **Qué hay:** un botón más en los controles de la llamada (solo si el escenario tiene `ficha`) que abre un panel con los mismos datos del brief y un botón para copiar cada uno. Se cierra con el mismo botón, con la X o con Esc. Mientras suena el teléfono no se muestra. Si el candidato lo deja abierto, la próxima llamada arranca abierto.
+- **Opciones que se evaluaron:** un panel desplegable (el elegido: sigue el patrón de los botones de teclado y transcripción y no tapa la esfera), tarjetas fijas (no entran en el celular) y un widget flotante que se arrastra (tapa la interfaz y es difícil de usar con teclado).
+- **Cuidado:** en el celular, la hoja tapa el botón Colgar mientras está abierta.
+- **Además:** la prueba de la cobranza en `e2e.test.mjs` había quedado vieja desde que en las salientes el operador dice los datos: esperaba que el brief no mostrara el DNI. Ahora verifica que la saliente lo muestra y la entrante no.
+- **Estado:** `npm test` pasa 155 de 155 y `npm run test:e2e`, 39 de 39 (con el Node de Windows: en WSL no está instalado el navegador de Playwright y una prueba de rutas con `\` da distinto en Linux).
+- **Lo que sigue (plan aprobado):** filtros en los informes, exportación a Excel y PDF (`exceljs` y `pdfmake`) y fragmentos de audio en el informe (con una casilla de consentimiento sin marcar, el registro de la aceptación en el informe, el audio guardado 90 días y escuchable también por el candidato).
+
 ### 2026-11-03 · Costo en dólares en el log (llamadas e informes)
 
 - **Qué hay:** `precios.js` con los precios hardcodeados, costo en las líneas `[VOZ]` y en las de Claude, y `npm run costos` para completar logs viejos y sumar. Detalle en "Costos en el log" de Arquitectura.
@@ -98,6 +108,12 @@ Registro paso a paso de los cambios del programa: qué se decidió, por qué y d
 - **Estado:** `test/precios.test.mjs`, nuevo. `LEEME.md` actualizado con los precios nuevos. `npm test` pasa 160 de 161 y `npm run test:e2e`, 37 de 38. Los dos que fallan (`estáticos: sirve la app y bloquea salir de /public` e `interrumpir al cliente lo corta y pasa a escuchar`) fallan igual sin estos cambios.
 
 ### 2026-11-03 · Log de tokens de la llamada de voz con Gemini Live
+
+- **Para qué:** saber cuántos tokens de entrada y salida gasta una simulación por voz.
+- **Qué hay:** el navegador suma el `usageMetadata` de Gemini Live y al colgar lo manda a `POST /api/voz/uso`; el servidor escribe una línea `[VOZ] gemini-live …` en la terminal y en `data/logs/ia-AAAA-MM-DD.log`. Detalle en la sección Voz de Arquitectura.
+- **Probado con la API real:** Google manda el conteo una vez por turno y el input de cada turno incluye el contexto anterior, por eso `in` crece más rápido que la duración de la llamada.
+- **Por qué lo reporta el navegador:** porque la voz va directo a Google (decisión de latencia y de seguridad de la key); el backend no ve la llamada.
+- **Estado:** test nuevo en `test/api.test.mjs`; `npm test` pasa 153 de 154. El que falla (`estáticos: sirve la app y bloquea salir de /public`, espera 403 y recibe 404 para `/..%5c.env`) falla igual sin estos cambios. Falta probarlo en una llamada de voz real en el navegador.
 
 ### 2026-10-29 · Guion de cobranza, indicadores de MKT y calibración del evaluador (rama `feat/calibrar-mkt`)
 
@@ -128,20 +144,6 @@ Registro paso a paso de los cambios del programa: qué se decidió, por qué y d
 - **Escala:** siguiendo el guion, una cobranza sacaba 55, y un 55/100 se lee como un fracaso aunque la persona lo haya hecho bien. El 3 del evaluador significa "cumple, lo hace bien", pero valía 50. Ahora cada nivel vale 1 = 0, 2 = 35, 3 = 65, 4 = 85, 5 = 100 (`VALOR_NIVEL` en `core.js`). Lo que se evalúa no cambia, solo cómo se lee el número. Con las corridas de calibración, la excelente pasa de 74 a 84 y la bien hecha, de 54 a 67; las malas casi no cambian (de 7 a 10 y de 1 a 2). Se actualizaron los rangos de `evals/calibracion-mkt/`. Los rangos de `evals/transcripciones/` (Nodo) eran para la escala anterior y falta revisarlos. Los informes ya guardados conservan el puntaje con el que se crearon. **Falta que RR. HH. lo confirme.**
 - **El cliente cortaba antes del cierre:** en las dos cobranzas de prueba, Diego se despedía apenas decía "sí, acepto", porque la regla del escenario era "se resuelve cuando hay un acuerdo de pago con fecha". El candidato no llegaba a dar el número de gestión ni a preguntar si había algo más, y el evaluador le bajaba Cierre o lo dejaba sin puntaje. Ahora la cobranza se resuelve cuando además se dio el número (si no se lo dan, Diego lo pide), y la consigna de voz de todos los clientes dice que, al aceptar un acuerdo, no se despidan en esa misma respuesta. Falta probarlo con la voz real.
 - **Estado:** `npm test` pasa 154 de 154 y `npm run test:e2e`, 38 de 38 (con la escala nueva, el informe de prueba da 81 en lugar de 71).
-
-### 2026-10-27 · Finales de línea: siempre LF
-
-- **Norma:** todos los archivos de texto van con LF. Está al principio de este archivo y la impone `.gitattributes` (`* text=auto eol=lf`).
-- **Qué se encontró:** en git los archivos ya estaban con LF (salvo `CLAUDE.md`, que estaba con CRLF), pero 54 archivos de la carpeta de trabajo habían quedado con CRLF. Los 16 que `git status` marcaba como modificados no tenían ningún cambio real: era solo eso. Se pasaron todos a LF y desaparecieron del `git status`.
-- **Para el PR a GitHub:** en `facu-sanabria/tutoring` algunos archivos están con CRLF (por ejemplo, `server.js`). Si la rama del PR pasa a LF, esos archivos van a aparecer enteros como cambiados. Conviene decidirlo con el equipo: o se hace en un PR aparte, solo de finales de línea, o se suma `.gitattributes` allá también.
-
-### 2026-10-27 · `feat/llamada-realista` unida a `master` y rama lista para el PR a GitHub
-
-- **Para qué:** saber cuántos tokens de entrada y salida gasta una simulación por voz.
-- **Qué hay:** el navegador suma el `usageMetadata` de Gemini Live y al colgar lo manda a `POST /api/voz/uso`; el servidor escribe una línea `[VOZ] gemini-live …` en la terminal y en `data/logs/ia-AAAA-MM-DD.log`. Detalle en la sección Voz de Arquitectura.
-- **Probado con la API real:** Google manda el conteo una vez por turno y el input de cada turno incluye el contexto anterior, por eso `in` crece más rápido que la duración de la llamada.
-- **Por qué lo reporta el navegador:** porque la voz va directo a Google (decisión de latencia y de seguridad de la key); el backend no ve la llamada.
-- **Estado:** test nuevo en `test/api.test.mjs`; `npm test` pasa 153 de 154. El que falla (`estáticos: sirve la app y bloquea salir de /public`, espera 403 y recibe 404 para `/..%5c.env`) falla igual sin estos cambios. Falta probarlo en una llamada de voz real en el navegador.
 
 ### 2026-10-27 · Mientras suena, solo el botón verde y al centro (rama `feat/llamada-realista`)
 
