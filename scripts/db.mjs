@@ -24,7 +24,10 @@ export async function migrar({ databaseUrl = env("DATABASE_URL"), soloMirar = fa
     dryRun: soloMirar,
     checkOrder: true,          // si alguien agrega una migración "en el medio", frena
     singleTransaction: false,  // cada archivo en su propia transacción
-    ...(schema ? { schema, createSchema: true, migrationsSchema: schema, createMigrationsSchema: true } : {}),
+    // Con esquema propio (solo las pruebas) no hace falta el candado de la base: cada esquema tiene su
+    // tabla de migraciones, y el candado es de toda la base, así que dos archivos de prueba que migran
+    // a la vez se pisaban con "Another migration is already running".
+    ...(schema ? { schema, createSchema: true, migrationsSchema: schema, createMigrationsSchema: true, noLock: true } : {}),
     log,
     verbose: false
   });
