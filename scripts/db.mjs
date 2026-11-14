@@ -24,10 +24,11 @@ export async function migrar({ databaseUrl = env("DATABASE_URL"), soloMirar = fa
     dryRun: soloMirar,
     checkOrder: true,          // si alguien agrega una migración "en el medio", frena
     singleTransaction: false,  // cada archivo en su propia transacción
-    // Con esquema propio (solo las pruebas) no hace falta el candado de la base: cada esquema tiene su
-    // tabla de migraciones, y el candado es de toda la base, así que dos archivos de prueba que migran
-    // a la vez se pisaban con "Another migration is already running".
-    ...(schema ? { schema, createSchema: true, migrationsSchema: schema, createMigrationsSchema: true, noLock: true } : {}),
+    // Con esquema propio (solo las pruebas): el candado de migraciones es de toda la base, pero los archivos
+    // de prueba migran en paralelo, cada uno en su esquema. Con "wait" esperan su turno en vez de fallar con
+    // "Another migration is already running", y nunca corren dos a la vez (la 0004 hace CREATE EXTENSION,
+    // que chocaría). Sin esquema (npm run db:migrar) el comportamiento no cambia.
+    ...(schema ? { schema, createSchema: true, migrationsSchema: schema, createMigrationsSchema: true, advisoryLockMode: "wait" } : {}),
     log,
     verbose: false
   });
