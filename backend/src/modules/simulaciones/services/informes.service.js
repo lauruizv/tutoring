@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const { isObj } = require("../../../shared/utils/validacion");
 const repo = require("../repositories/informes.repository");
+const simulaciones = require("./simulaciones.service");
 
 // Informes de simulaciones: la empresa ve todos; estudiante y junior, solo los suyos.
 const loVe = (yo, r) => yo.rol === "empresa" || (Boolean(r.usuarioId) && r.usuarioId === yo.id);
@@ -12,15 +13,33 @@ function listar(yo) {
 }
 
 // Devuelve { error: { status, message } } o { id }.
-function crear(r, yo) {
+// Una cuenta de Postgres (yo.empresaId) deja registrada la simulación, con su precio, ANTES de guardar el informe:
+// si no se puede registrar no se guarda nada, y si después no se puede guardar el informe, se anula el registro.
+async function crear(r, yo) {
   // El nombre sale de la sesión, no de lo que manda el navegador. Los scripts locales lo traen en el pedido.
   if (!yo.local) { r.candidato = yo.nombre; r.usuarioId = yo.id; }
   if (typeof r.candidato !== "string" || !r.candidato.trim()) return { error: { status: 400, message: "El informe no tiene candidato." } };
   if (!isObj(r.evaluacion)) return { error: { status: 400, message: "El informe no trae la evaluación." } };
+  // La simulación y la empresa las pone solo el servidor: lo que mande el navegador se descarta.
+  delete r.simulacionId;
+  delete r.empresaId;
+  let simulacionId = null;
+  if (yo.empresaId) {
+    try { simulacionId = await simulaciones.registrar({ empresaId: yo.empresaId, usuarioId: yo.id, informe: r }); }
+    catch (e) {
+      console.error("[informes] no se pudo registrar la simulación -", e.message);
+      return { error: { status: 503, message: "No se pudo registrar la simulación. Probá guardar de nuevo en un momento." } };
+    }
+    r.simulacionId = simulacionId;
+    r.empresaId = yo.empresaId;
+  }
   r.id = crypto.randomUUID();
   if (!r.fecha) r.fecha = new Date().toISOString();
   try { repo.guardar(r); }
-  catch (_) { return { error: { status: 500, message: "No se pudo escribir el informe en data/informes." } }; }
+  catch (_) {
+    if (simulacionId) await simulaciones.anular(simulacionId);
+    return { error: { status: 500, message: "No se pudo escribir el informe en data/informes." } };
+  }
   return { id: r.id };
 }
 

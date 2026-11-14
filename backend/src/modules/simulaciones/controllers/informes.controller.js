@@ -12,7 +12,7 @@ function listar(req, res, { yo }) {
 async function crear(req, res, { yo }) {
   const r = await bodyObject(req, res, LIMITS.informe, "");
   if (!r) return;
-  const out = service.crear(r, yo);
+  const out = await service.crear(r, yo);
   return out.error ? fail(res, out.error.status, out.error.message) : json(res, 200, { id: out.id });
 }
 

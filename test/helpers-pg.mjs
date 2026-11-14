@@ -3,6 +3,8 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { migrar } from "../scripts/db.mjs";
+import { crearJwt } from "../backend/src/modules/auth/jwt.js";
+import { startApp } from "./helpers.mjs";
 import { URL_PRUEBA, motivoParaSaltear } from "./db-prueba.mjs";
 
 export const omitirPg = await motivoParaSaltear();
@@ -44,3 +46,34 @@ export async function simHace(db, empresaId, usuarioId, dias, precio) {
      VALUES ($1, $2, 'Escenario de prueba', 60, $3, now() - make_interval(days => $4::int)) RETURNING id`,
     [empresaId, usuarioId, precio, dias])).rows[0].id;
 }
+
+// Cookie de una cuenta de Postgres: el JWT de acceso, firmado con el mismo secreto que usa el servidor.
+export async function cookieDe(secreto, usuarioId) {
+  const jwt = await crearJwt(secreto).firmar({ usuarioId, tokenVersion: 1, metodo: "google" });
+  return `acceso=${jwt}`;
+}
+
+// Un servidor de prueba conectado a un esquema propio y con JWT_SECRET. `cerrar()` apaga todo y borra el esquema.
+export async function appConPostgres({ env = {} } = {}) {
+  const { esquema, db, envDb, borrar } = await crearEsquema();
+  const secreto = crypto.randomBytes(48).toString("base64url");
+  let app;
+  try {
+    app = await startApp({ env: { ...envDb, JWT_SECRET: secreto, ...env } });
+  } catch (e) {
+    await borrar();
+    throw e;
+  }
+  return { app, db, esquema, secreto, async cerrar() { await app.stop(); await borrar(); } };
+}
+
+// Un informe como lo manda el navegador al terminar una simulación.
+export const INFORME_PRUEBA = {
+  fecha: "2026-11-12T18:03:11.000Z",
+  duracionSeg: 185,
+  empresa: "MKT Contact Center",
+  escenario: { titulo: "Reclamo por doble cobro", resumen: "r", cliente: "Marta Díaz", objetivo: "o" },
+  criteriosDef: [],
+  evaluacion: { resumen: "ok", criterios: [] },
+  puntaje: 78
+};
