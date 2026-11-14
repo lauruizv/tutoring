@@ -14,6 +14,12 @@ async function buscarPorId(id) {
   return aUsuario(rows[0]) || null;
 }
 
+// Cuántos usuarios activos con ese rol tiene la empresa.
+async function contarActivosPorRol(empresaId, rol) {
+  const { rows } = await query("SELECT count(*)::int AS n FROM usuarios WHERE empresa_id = $1 AND rol = $2 AND activo", [empresaId, rol]);
+  return rows[0].n;
+}
+
 async function buscarPorIdentidad(proveedor, sub) {
   const { rows } = await query(
     `SELECT ${CAMPOS} FROM identidades_externas i
@@ -85,4 +91,4 @@ async function crearInvitacion({ empresa, email, rol, dias = 7, creadaPor = null
   }
 }
 
-module.exports = { buscarPorId, buscarPorIdentidad, aceptarInvitacion, crearInvitacion };
+module.exports = { buscarPorId, contarActivosPorRol, buscarPorIdentidad, aceptarInvitacion, crearInvitacion };

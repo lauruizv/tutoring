@@ -6,10 +6,22 @@ const simulaciones = require("./simulaciones.service");
 // Informes de simulaciones: la empresa ve todos; estudiante y junior, solo los suyos.
 const loVe = (yo, r) => yo.rol === "empresa" || (Boolean(r.usuarioId) && r.usuarioId === yo.id);
 
+// La fila que muestran las listas (la de Informes y la del inicio de la empresa).
+const resumen = r => ({ id: r.id, candidato: r.candidato, escenario: r.escenario && r.escenario.titulo, empresa: r.empresa, fecha: r.fecha, puntaje: r.puntaje });
+const masNuevoPrimero = (a, b) => String(b.fecha).localeCompare(String(a.fecha));
+
 function listar(yo) {
   return repo.listar().map(r =>
-    isObj(r) && r.id && loVe(yo, r) ? { id: r.id, candidato: r.candidato, escenario: r.escenario && r.escenario.titulo, empresa: r.empresa, fecha: r.fecha, puntaje: r.puntaje } : null
-  ).filter(Boolean).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+    isObj(r) && r.id && loVe(yo, r) ? resumen(r) : null
+  ).filter(Boolean).sort(masNuevoPrimero);
+}
+
+// Los últimos `limite` informes de una empresa (los guardados con su empresaId: cuentas de Postgres).
+// Ignora lo ilegible y lo que no tiene empresaId o es de otra empresa.
+function recientes(empresaId, limite) {
+  if (!empresaId) return [];
+  return repo.listar().filter(r => isObj(r) && r.id && r.empresaId === empresaId)
+    .map(resumen).sort(masNuevoPrimero).slice(0, limite);
 }
 
 // Devuelve { error: { status, message } } o { id }.
@@ -52,4 +64,4 @@ function obtener(id, yo, sinPermiso) {
 
 const borrar = id => repo.borrar(id);
 
-module.exports = { listar, crear, obtener, borrar };
+module.exports = { listar, recientes, crear, obtener, borrar };

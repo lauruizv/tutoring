@@ -1,9 +1,14 @@
-/* Pruebas de la lógica pura del inicio de la empresa
+/* Pruebas del inicio de la empresa. Las primeras son de la lógica pura
    (backend/src/modules/empresa/inicio.service.js): validación del pedido y armado de la respuesta
-   con tres fuentes de mentira. Sin base, sin archivos y sin servidor. */
-import { test } from "node:test";
+   con tres fuentes de mentira, sin base, sin archivos y sin servidor. Las últimas pegan contra el servidor
+   (`GET /api/empresa/inicio`); las del bloque "con Postgres" necesitan TEST_DATABASE_URL y si no, se saltean. */
+import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { createRequire } from "node:module";
+import { startApp, pedir } from "./helpers.mjs";
+import { omitirPg, appConPostgres, cookieDe, crearEmpresa, crearUsuario, simHace, INFORME_PRUEBA } from "./helpers-pg.mjs";
 
 const require = createRequire(import.meta.url);
 const { crearInicio } = require("../backend/src/modules/empresa/inicio.service.js");
@@ -68,4 +73,95 @@ test("montos a dos decimales y nunca más de 4 informes", async () => {
     informesRecientes: () => [1, 2, 3, 4, 5, 6]
   })).obtener(EMPRESA, null);
   assert.deepEqual([r.datos.gasto.total, r.datos.gasto.enPeriodo, r.datos.informesRecientes.length], [7.5, 0.3, 4]);
+});
+
+test("sin Postgres: la empresa con contraseña recibe 409 y el resto de los roles 403", async () => {
+  const app = await startApp();
+  try {
+    const r = await pedir(app.base, "/api/empresa/inicio");                       // cookie de empresa1
+    assert.deepEqual([r.status, r.cuerpo.error.type], [409, "sin_empresa"]);
+    assert.equal((await pedir(app.base, "/api/empresa/inicio", { cookie: await app.ingresar("estudiante1") })).status, 403);
+    assert.equal((await pedir(app.base, "/api/empresa/inicio", { cookie: null })).status, 401);
+  } finally { await app.stop(); }
+});
+
+describe("inicio con Postgres", { skip: omitirPg }, () => {
+  let pgApp, app, db, A, B, C, uEstC, cEmpA, cEstA, cJuniorA, cEmpB, cEstB, cEmpC;
+  const inicio = (cookie, q = "") => pedir(app.base, "/api/empresa/inicio" + q, { cookie });
+
+  before(async () => {
+    pgApp = await appConPostgres();
+    ({ app, db } = pgApp);
+    const cookie = id => cookieDe(pgApp.secreto, id);
+    A = await crearEmpresa(db, "Empresa A");
+    cEmpA = await cookie(await crearUsuario(db, { empresaId: A, rol: "empresa" }));
+    cEstA = await cookie(await crearUsuario(db, { empresaId: A, rol: "estudiante", nombre: "Lucía Paz" }));
+    cJuniorA = await cookie(await crearUsuario(db, { empresaId: A, rol: "junior" }));
+    await crearUsuario(db, { empresaId: A, rol: "junior" });
+    await crearUsuario(db, { empresaId: A, rol: "junior", activo: false });
+    B = await crearEmpresa(db, "Empresa B");
+    cEmpB = await cookie(await crearUsuario(db, { empresaId: B, rol: "empresa" }));
+    cEstB = await cookie(await crearUsuario(db, { empresaId: B, rol: "estudiante" }));
+    await crearUsuario(db, { empresaId: B, rol: "junior" });
+    C = await crearEmpresa(db, "Empresa C");
+    cEmpC = await cookie(await crearUsuario(db, { empresaId: C, rol: "empresa" }));
+    uEstC = await crearUsuario(db, { empresaId: C, rol: "estudiante" });
+  });
+  after(async () => { if (pgApp) await pgApp.cerrar(); });
+
+  test("empresa sin actividad: ceros, lista vacía y solo sus juniors activos", async () => {
+    const r = await inicio(cEmpA);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.cuerpo, { dias: 30, juniorsEnCapacitacion: 2, simulaciones: { total: 0, enPeriodo: 0 },
+      gasto: { moneda: "USD", total: 0, enPeriodo: 0 }, informesRecientes: [] });
+  });
+
+  test("después de una simulación: 1 simulación, 2.5 de gasto y el informe en recientes", async () => {
+    const { id } = (await pedir(app.base, "/api/informes", { method: "POST", json: INFORME_PRUEBA, cookie: cEstA })).cuerpo;
+    const c = (await inicio(cEmpA)).cuerpo;
+    assert.deepEqual([c.simulaciones, c.gasto], [{ total: 1, enPeriodo: 1 }, { moneda: "USD", total: 2.5, enPeriodo: 2.5 }]);
+    assert.deepEqual(c.informesRecientes, [{ id, candidato: "Lucía Paz", escenario: "Reclamo por doble cobro",
+      empresa: "MKT Contact Center", fecha: INFORME_PRUEBA.fecha, puntaje: 78 }]);
+  });
+
+  test("no mezcla empresas, ni muestra archivos rotos, informes viejos o de cuentas con contraseña", async () => {
+    await pedir(app.base, "/api/informes", { method: "POST", json: INFORME_PRUEBA, cookie: cEstB });
+    await pedir(app.base, "/api/informes", { method: "POST", json: INFORME_PRUEBA, cookie: await app.ingresar("estudiante1") });
+    fs.writeFileSync(path.join(app.dataDir, "informes", "roto.json"), "{ esto no es json");
+    fs.writeFileSync(path.join(app.dataDir, "informes", "viejo.json"), JSON.stringify({ id: "viejo-0001", candidato: "X", fecha: "2030-01-01T00:00:00.000Z", evaluacion: {} }));
+    const a = (await inicio(cEmpA)).cuerpo, b = (await inicio(cEmpB)).cuerpo;
+    assert.deepEqual([a.simulaciones.total, a.informesRecientes.length], [1, 1]);
+    assert.deepEqual([b.simulaciones.total, b.juniorsEnCapacitacion, b.informesRecientes.length], [1, 1, 1]);
+  });
+
+  test("borrar el informe no baja simulaciones ni gasto, pero lo saca de recientes", async () => {
+    const id = (await inicio(cEmpA)).cuerpo.informesRecientes[0].id;
+    await pedir(app.base, `/api/informes/${id}`, { method: "DELETE", cookie: cEmpA });
+    const c = (await inicio(cEmpA)).cuerpo;
+    assert.deepEqual([c.simulaciones.total, c.gasto.total, c.informesRecientes], [1, 2.5, []]);
+  });
+
+  test("recientes: los 4 más nuevos, del más nuevo al más viejo", async () => {
+    for (const d of ["01", "02", "03", "04", "05", "06"])
+      await pedir(app.base, "/api/informes", { method: "POST", json: { ...INFORME_PRUEBA, fecha: `2026-10-${d}T12:00:00.000Z` }, cookie: cEstA });
+    assert.deepEqual((await inicio(cEmpA)).cuerpo.informesRecientes.map(r => r.fecha.slice(8, 10)), ["06", "05", "04", "03"]);
+  });
+
+  test("período: dias filtra simulaciones y gasto; el total no cambia", async () => {
+    for (const d of [3, 10, 20, 40]) await simHace(db, C, uEstC, d, 2.5);
+    const de = async q => { const c = (await inicio(cEmpC, q)).cuerpo; return [c.dias, c.simulaciones, c.gasto.total, c.gasto.enPeriodo]; };
+    assert.deepEqual(await de("?dias=7"),  [7,  { total: 4, enPeriodo: 1 }, 10, 2.5]);
+    assert.deepEqual(await de("?dias=15"), [15, { total: 4, enPeriodo: 2 }, 10, 5]);
+    assert.deepEqual(await de(""),         [30, { total: 4, enPeriodo: 3 }, 10, 7.5]);
+  });
+
+  test("permisos y errores", async () => {
+    assert.equal((await inicio(null)).status, 401);
+    assert.equal((await inicio(cEstA)).status, 403);
+    assert.equal((await inicio(cJuniorA)).status, 403);
+    assert.equal((await inicio(cEmpA, "?dias=5")).status, 400);
+    assert.equal((await pedir(app.base, "/api/empresa/inicio", { method: "POST", json: {}, cookie: cEmpA })).status, 405);
+    const clave = await inicio(await app.ingresar("empresa1"));
+    assert.deepEqual([clave.status, clave.cuerpo.error.type], [409, "sin_empresa"]);
+  });
 });

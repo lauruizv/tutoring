@@ -3,15 +3,27 @@
 const { fail } = require("./shared/http/respuesta");
 const { exigir, mismoOrigen, MSG_SIN_PERMISO } = require("./shared/http/permisos");
 const { crearRouter } = require("./shared/http/router");
-const { usuarioDe } = require("./modules/auth/sesion");
+const { usuarioDe, repoPg } = require("./modules/auth/sesion");
 const auth = require("./modules/auth/auth.routes");
 const ia = require("./modules/ia/ia.routes");
 const { chequeo } = require("./modules/ia/chequeo.controller");
 const empresa = require("./modules/empresa/empresa.routes");
 const simulaciones = require("./modules/simulaciones/simulaciones.routes");
+const { crearInicio } = require("./modules/empresa/inicio.service");
+const inicioEmpresa = require("./modules/empresa/inicio.routes");
+const simulacionesService = require("./modules/simulaciones/services/simulaciones.service");
+const informesService = require("./modules/simulaciones/services/informes.service");
+
+// El inicio de la empresa junta datos de tres módulos; el módulo empresa no los conoce, se los pasamos acá.
+// repoPg solo se usa con yo.empresaId, que solo tienen las cuentas de Postgres: ahí siempre existe.
+const inicio = crearInicio({
+  contarJuniors: id => repoPg.contarActivosPorRol(id, "junior"),
+  resumenSimulaciones: simulacionesService.resumen,
+  informesRecientes: informesService.recientes
+});
 
 const publicas = crearRouter(auth.publicas);
-const privadas = crearRouter([...auth.privadas, ...ia, ...simulaciones, ...empresa]);
+const privadas = crearRouter([...auth.privadas, ...ia, ...simulaciones, ...empresa, ...inicioEmpresa(inicio)]);
 
 async function handleApi(req, res, url) {
   const libre = url.pathname.startsWith("/api/chequeo/");   // solo desde esta compu, ver chequeo.controller.js
