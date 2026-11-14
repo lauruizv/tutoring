@@ -25,10 +25,10 @@ const TABLAS = ["consumo_ia", "contextos", "criterio_indicadores", "criterios", 
   "escenarios", "identidades_externas", "informe_criterios", "informe_observaciones", "informes", "invitaciones",
   "migraciones", "simulaciones", "transcripcion_turnos", "usuarios"];
 
-test("db:estado lista las 4 migraciones pendientes sin aplicar nada", { skip: omitir }, async () => {
+test("db:estado lista las 5 migraciones pendientes sin aplicar nada", { skip: omitir }, async () => {
   assert.deepEqual(await migrar({ databaseUrl: URL, schema: ESQUEMA, soloMirar: true }), [
     "0001_empresas_usuarios_invitaciones", "0002_configuracion_de_empresa",
-    "0003_simulaciones_informes_consumo", "0004_extension_vector"
+    "0003_simulaciones_informes_consumo", "0004_extension_vector", "0005_precio_de_simulacion"
   ]);
   const c = await conectar();
   const { rows } = await c.query("SELECT count(*)::int n FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'usuarios'", [ESQUEMA]);
@@ -36,7 +36,7 @@ test("db:estado lista las 4 migraciones pendientes sin aplicar nada", { skip: om
 });
 
 test("db:migrar crea todas las tablas y la vista", { skip: omitir }, async () => {
-  assert.equal((await migrar({ databaseUrl: URL, schema: ESQUEMA })).length, 4);
+  assert.equal((await migrar({ databaseUrl: URL, schema: ESQUEMA })).length, 5);
   const c = await conectar();
   const t = await c.query("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY 1", [ESQUEMA]);
   assert.deepEqual(t.rows.map(r => r.table_name), TABLAS);
@@ -55,4 +55,17 @@ test("las reglas de la base funcionan después de migrar (email en minúsculas)"
   await c.query(`SET search_path TO "${ESQUEMA}", public`);
   const emp = (await c.query("INSERT INTO empresas (nombre) VALUES ('Prueba') RETURNING id")).rows[0].id;
   await assert.rejects(c.query("INSERT INTO usuarios (empresa_id, email, nombre, rol) VALUES ($1, 'Maria@Gmail.com', 'María', 'estudiante')", [emp]), /usuarios_email_check/);
+});
+
+test("simulaciones exige precio_usd: sin valor por defecto y sin negativos", { skip: omitir }, async () => {
+  const c = await conectar();
+  await c.query(`SET search_path TO "${ESQUEMA}", public`);
+  const emp = (await c.query("INSERT INTO empresas (nombre) VALUES ('Precio') RETURNING id")).rows[0].id;
+  const usu = (await c.query("INSERT INTO usuarios (empresa_id, email, nombre, rol) VALUES ($1, 'precio@prueba.com', 'Pre Cio', 'estudiante') RETURNING id", [emp])).rows[0].id;
+  const insertar = precio => c.query(
+    `INSERT INTO simulaciones (empresa_id, usuario_id, escenario_titulo, duracion_seg${precio === undefined ? "" : ", precio_usd"})
+     VALUES ($1, $2, 'Título', 60${precio === undefined ? "" : ", " + precio}) RETURNING precio_usd`, [emp, usu]);
+  await assert.rejects(insertar(), /precio_usd/);
+  await assert.rejects(insertar(-1), /simulaciones_precio_usd_check/);
+  assert.equal((await insertar(2.5)).rows[0].precio_usd, "2.50");
 });
