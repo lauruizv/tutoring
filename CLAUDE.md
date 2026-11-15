@@ -39,6 +39,10 @@ Otras reglas del servidor:
 - **Permisos por rol** (`exigir`): solo `empresa` guarda la configuración, borra informes y usa `/api/diagnostico`. Cada estudiante o junior ve solo sus informes (`loVe`, por `usuarioId`) y el servidor pone `candidato` con el nombre de la sesión.
 - **Llave local:** los scripts de la compu (`chequeo`, `probar-ia`, `evals/puente.mjs`) no tienen cookie. Mandan el contenido de `DATA_DIR/llave-local.txt` en el encabezado `x-llave-local` y entran con permisos de empresa.
 
+**Postgres (opcional al arrancar).** `backend/src/shared/db.js` abre el pool con `DATABASE_URL`, y recién cuando alguien lo pide: sin esa variable el servidor arranca igual. Las migraciones están en `db/migrations/` (`npm run db:migrar`). Hoy viven en Postgres las cuentas que entran con Google (su sesión trae `empresaId`) y el registro de simulaciones (tabla `simulaciones`). La configuración de la empresa, los informes y las cuentas con contraseña siguen en JSON. Para las pruebas de la base: `docker compose up -d` (puerto 55432; si no puede leer el `.env`, `docker compose --env-file /dev/null up -d`) y `TEST_DATABASE_URL`. Sin esa variable esas pruebas se saltean.
+
+**Inicio de la empresa (`GET /api/empresa/inicio?dias=7|15|30`, sin `dias` vale 30).** Devuelve `{ dias, juniorsEnCapacitacion, simulaciones: { total, enPeriodo }, gasto: { moneda: "USD", total, enPeriodo }, informesRecientes }`; los informes son hasta 4, con la forma de la lista de `GET /api/informes`. Responde solo al rol `empresa` y solo si su cuenta está en Postgres: una cuenta con contraseña o un script local recibe 409 `sin_empresa`; un `dias` inválido, 400; si una fuente falla, 503. Cada simulación se registra en `POST /api/informes`: si quien guarda tiene `empresaId`, primero se inserta la fila de `simulaciones` con `precio_usd` (el precio vigente, congelado) y después se guarda el informe JSON con `simulacionId` y `empresaId`, que pone solo el servidor (lo que mande el navegador en esos campos se descarta). Si no se puede registrar, responde 503 y no guarda el informe; si no se puede guardar el informe, anula la simulación. Borrar un informe no borra su simulación: sigue contando en simulaciones y en gasto. El precio es `PRECIO_SIMULACION_USD` (provisorio) en `simulaciones.service.js`, y nadie lo lee directo: se pide por `precioVigenteUsd()`, porque a futuro se va a editar desde un panel de administración y se va a leer de la base. No se confunde con `shared/utils/precios.js`, que son los precios de los modelos de IA (lo que nos cuestan a nosotros). Los módulos siguen sin importarse entre sí: `backend/src/routes.js` es el único lugar que junta las fuentes de `auth` y `simulaciones` y se las pasa a `empresa/inicio.service.js`. Diseño: `docs/superpowers/specs/2026-11-13-home-empresa-design.md`.
+
 **Proveedores de IA.** Hay tres, configurados por `.env`:
 - `claude-sdk`: el Claude Agent SDK (Claude Code con la suscripción de la máquina), usado solo como modelo de texto, sin herramientas y en un directorio vacío (`opcionesSdk`).
 - `anthropic`: la API de Anthropic por `fetch` directo, no con `@anthropic-ai/sdk`.
@@ -86,6 +90,34 @@ Hoy hay 5 casos sintéticos, todos del escenario `incidente-viernes` de Nodo, co
 ## Bitácora
 
 Registro paso a paso de los cambios del programa: qué se decidió, por qué y dónde está el detalle. Se actualiza en cada paso, con el más nuevo arriba. Cuando algo se implementa, se describe también en la sección de arquitectura que corresponda.
+
+### 2026-11-15 · Inicio de la empresa: simulaciones y gasto en Postgres (rama `feat/perfil-empresa`)
+
+- **Para qué:** que quien mira la empresa (CEO, RR. HH. o quien lleva onboarding) vea de un vistazo cuánta gente tiene en capacitación, cuántas simulaciones se hicieron, cuánto lleva gastado y los últimos informes. Es solo para mirar. Este trabajo es solo backend: el frontend se diseña después.
+- **Qué hay:**
+  - `GET /api/empresa/inicio?dias=7|15|30`. Detalle en "Inicio de la empresa" de Arquitectura.
+  - Migración `db/migrations/0005_precio_de_simulacion.sql`: columna `precio_usd numeric(10, 2) NOT NULL` en `simulaciones`, sin valor por defecto a propósito.
+  - `simulaciones/repositories/simulaciones-pg.repository.js` (insertar, borrar y el resumen en una sola consulta), `simulaciones/services/simulaciones.service.js` (precio, saneado, registrar, anular, resumen), `informes.service.js` (`crear` ahora es asíncrona; `recientes`), `auth/usuarios-pg.repository.js` (`contarActivosPorRol`) y `empresa/inicio.{service,controller,routes}.js`.
+  - Pruebas: `test/helpers-pg.mjs` (esquema de prueba al azar, empresas, usuarios, cookies firmadas), `test/simulaciones.test.mjs`, `test/informes-pg.test.mjs` y `test/inicio.test.mjs`. Las que usan la base se saltean sin `TEST_DATABASE_URL`.
+  - `scripts/db.mjs` pasa `advisoryLockMode: "wait"` cuando recibe `schema` (solo las pruebas): los archivos de prueba migran en paralelo y antes fallaban a veces con "Another migration is already running". `npm run db:migrar` no cambió.
+- **Decisiones:**
+  - El gasto sale de lo guardado en cada simulación, no de cantidad por el precio de hoy: cambiar el precio no cambia lo que costaron las anteriores.
+  - Los totales se cuentan en cada pedido; no se guarda un total por empresa. Si algún día la consulta se vuelve lenta: primero sumar `precio_usd` al índice y después una tabla de totales por mes.
+  - "Últimos N días" es una ventana corrida de N × 24 horas con el reloj de la base, no días de calendario.
+  - Primero se registra la simulación y después se guarda el informe. Si la base está caída, una cuenta de Postgres no puede guardar su informe hasta que vuelva (el navegador deja reintentar).
+  - Se registra y se cobra la simulación de cualquier rol, también si la hace alguien de la empresa para probar. Una llamada que no llega a informe no cuenta.
+  - Una cuenta de empresa con contraseña recibe un 409 claro en vez de ceros, para que no parezca que no hubo actividad.
+  - El navegador no decide precio, empresa ni simulación del informe: el servidor descarta `simulacionId` y `empresaId` del cuerpo.
+  - Sin respaldo en JSON: sin Postgres no hay inicio.
+- **Límites conocidos:**
+  - Las simulaciones de cuentas con contraseña no se registran ni se cobran hasta que esas cuentas pasen a Postgres.
+  - En AWS todavía no hay Postgres, así que ahí el inicio responde 409 para todos. Se resuelve en el diseño de "Postgres en AWS".
+  - Si el servidor guardó el informe pero la respuesta se perdió, el reintento del navegador crea otro informe y otra simulación (cobro doble). Queda anotado para la migración de informes.
+  - Los informes anteriores a este cambio no tienen simulación registrada y no cuentan.
+  - `GET /api/informes` sigue mostrándole al rol empresa todos los informes del servidor, sin filtrar por empresa. El inicio sí filtra.
+  - Probarlo a mano necesita entrar con Google en la compu (`GOOGLE_CLIENT_ID`, `JWT_SECRET` y `DATABASE_URL` en el `.env`).
+- **Coordinación:** la migración toma el número `0005`; si Facu agrega otra en paralelo hay que renumerar antes de mergear. Lau toca `informes.service.js` (`crear`) e `informes.controller.js`: cuando suba lo suyo hay que mezclarlos a mano.
+- **Estado:** `npm test` sin base pasa 196 de 202 (5 saltean y falla el de siempre, `estáticos: sirve la app y bloquea salir de /public`). Con `TEST_DATABASE_URL` pasa 235 de 236, con la misma falla y ninguna salteada. `npm run demo` arranca sin base (`/health` responde `{"ok":true}`). Diseño y plan: `docs/superpowers/specs/2026-11-13-home-empresa-design.md` y `docs/superpowers/plans/2026-11-13-home-empresa.md`.
 
 ### 2026-11-03 · Costo en dólares en el log (llamadas e informes)
 
