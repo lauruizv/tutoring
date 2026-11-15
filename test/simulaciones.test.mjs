@@ -54,7 +54,8 @@ describe("simulaciones en Postgres", { skip: omitirPg }, () => {
       [{ escenario: null, duracionSeg: -5 }, "Sin título", 0],
       [{ escenario: { titulo: "   " }, duracionSeg: "abc" }, "Sin título", 0],
       [{ escenario: { titulo: 42 }, duracionSeg: 1e12 }, "Sin título", 86400],
-      [{ escenario: { titulo: "x".repeat(5000) }, duracionSeg: 90.6 }, "x".repeat(200), 91]
+      [{ escenario: { titulo: "x".repeat(5000) }, duracionSeg: 90.6 }, "x".repeat(200), 91],
+      [{ escenario: { titulo: "Recla\u0000mo" }, duracionSeg: 10 }, "Reclamo", 10]
     ];
     for (const [informe, titulo, seg] of casos) {
       const f = await fila(await svc.registrar({ empresaId: A, usuarioId: uA, informe }));

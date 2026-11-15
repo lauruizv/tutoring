@@ -40,7 +40,7 @@ async function crear(r, yo) {
     try { simulacionId = await simulaciones.registrar({ empresaId: yo.empresaId, usuarioId: yo.id, informe: r }); }
     catch (e) {
       console.error("[informes] no se pudo registrar la simulación -", e.message);
-      return { error: { status: 503, message: "No se pudo registrar la simulación. Probá guardar de nuevo en un momento." } };
+      return { error: { status: 503, message: "No se pudo registrar la simulación." } };
     }
     r.simulacionId = simulacionId;
     r.empresaId = yo.empresaId;

@@ -13,7 +13,7 @@ async function precioVigenteUsd() {
 // Los datos vienen del informe que arma el navegador: no se confía en su forma.
 const texto = (v, max) => {
   if (typeof v !== "string") return null;
-  const t = v.trim().slice(0, max);
+  const t = v.replace(/\u0000/g, "").trim().slice(0, max);
   return t || null;
 };
 const duracion = v => (typeof v === "number" && Number.isFinite(v) ? Math.min(86400, Math.max(0, Math.round(v))) : 0);

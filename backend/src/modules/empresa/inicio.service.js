@@ -13,7 +13,7 @@ const SIN_EMPRESA = {
   message: "El inicio todavía no está disponible para esta cuenta: hace falta una cuenta de empresa que entre con Google."
 };
 const DIAS_INVALIDOS = { status: 400, message: "El período tiene que ser de 7, 15 o 30 días." };
-const FUENTE_CAIDA = { status: 503, message: "No se pudieron leer los datos del inicio. Probá de nuevo en un momento." };
+const FUENTE_CAIDA = { status: 503, message: "No se pudieron leer los datos del inicio." };
 
 function crearInicio({ contarJuniors, resumenSimulaciones, informesRecientes }) {
   /* `diasCrudo` es lo que devuelve url.searchParams.get("dias"): string o null. */
