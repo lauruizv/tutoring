@@ -194,6 +194,8 @@ El service del inicio no sabe de Postgres ni de archivos: recibe funciones. Eso 
 - **Doble guardado:** si el servidor guardó el informe pero la respuesta se perdió, el reintento del navegador crea otro informe y otra simulación, o sea un cobro doble. Ya pasa hoy con los informes duplicados. No se resuelve acá; queda anotado para la migración de informes.
 - **`GET /api/informes`** sigue mostrándole al rol empresa todos los informes del servidor, sin filtrar por empresa. El home sí filtra. Se empareja en la migración de informes.
 - **Probarlo a mano** necesita entrar con Google en la compu (`GOOGLE_CLIENT_ID`, `JWT_SECRET` y `DATABASE_URL` en el `.env`). Las pruebas automáticas no: usan claves de Google de prueba, como `test/login-google.test.mjs`.
+- **Se puede inflar el gasto:** cualquier cuenta de Postgres puede sumar simulaciones y gasto mandando `POST /api/informes` sin haber hecho una llamada, porque el servidor no ve la llamada ni la evaluación. No hay tope. Está pendiente de decisión: un tope por usuario, exigir duración y turnos, o pasar la evaluación al servidor. Mientras tanto, el gasto no sirve como base de facturación. (encontrado en la revisión final, 2026-11-15)
+- **Simulación cobrada sin informe:** si el proceso muere entre registrar la simulación y guardar el informe, o si el `INSERT` se confirma pero su respuesta se pierde, queda una fila sin informe. Se cierra cuando informes y simulaciones se guarden en la misma transacción (migración de informes a Postgres). (encontrado en la revisión final, 2026-11-15)
 
 ## Pruebas
 
