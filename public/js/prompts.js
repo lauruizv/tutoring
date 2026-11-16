@@ -128,6 +128,7 @@ LA CONVERSACIÓN
 CÓMO TERMINAR
 - La conversación termina cuando la situación se resuelve o cuando te cansás. No te despidas antes.
 ${esc.cierre ? `- Cuándo se resuelve: ${esc.cierre}` : "- Se resuelve cuando te dan un acuerdo concreto (qué pasa, quién lo hace y cuándo). Solo entonces podés despedirte."}
+- Cuando aceptás un acuerdo, no te despidas en esa misma respuesta: ${candidato} todavía tiene que cerrar (por ejemplo, darte un número de gestión o preguntarte si necesitás algo más). Despedite recién cuando ${candidato} se despida o te pregunte si necesitás algo más.
 - Si ${candidato} todavía no llegó a resolverlo pero sigue intentando, seguí conversando: repreguntá, poné límites, pedí cosas concretas. No cortes solo porque pasó tiempo.
 - Si ${candidato} evade, no propone nada o te trata mal, te cansás: decilo con una frase que muestre que no te deja conforme, y despedite.
 - Al despedirte, en una oración corta, escribí al final, en una línea aparte, exactamente: [FIN]

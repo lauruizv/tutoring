@@ -1,0 +1,36 @@
+{
+  "nombre": "cal-mkt-04-malo",
+  "descripcion": "Valida la identidad, pero juzga al cliente, insiste con el pago total aunque le dijo que no puede, le hace repetir lo que ya contó y cierra sin acuerdo claro ni número de gestión.",
+  "origen": "sintético, para calibrar (no es una conversación real)",
+  "empresa": "mkt",
+  "escenarioId": "mkt-cobranza",
+  "candidato": "Candidato de prueba",
+  "minutos": 4,
+  "esperado": {
+    "total": { "min": 5, "max": 30 },
+    "criterios": {
+      "Escucha activa": { "min": 1, "max": 2 },
+      "Empatía y control emocional": { "min": 1, "max": 2 },
+      "Claridad": { "min": 1, "max": 3 },
+      "Procedimiento": { "min": 1, "max": 3 },
+      "Resolución": { "min": 1, "max": 2 },
+      "Cierre": { "min": 1, "max": 2 }
+    }
+  },
+  "transcripcion": [
+    { "role": "assistant", "text": "¿Hola?" },
+    { "role": "user", "text": "Hola, ¿con Diego Sosa? Le hablo de ConectAR." },
+    { "role": "assistant", "text": "Sí, soy yo." },
+    { "role": "user", "text": "Figura DNI 33.221.004 y fecha de nacimiento 9 de noviembre de 1991. ¿Es usted?" },
+    { "role": "assistant", "text": "Sí, soy yo." },
+    { "role": "user", "text": "Bien. Usted debe 38.000 pesos, dos facturas. Tiene que regularizar hoy." },
+    { "role": "assistant", "text": "Ya sé, ya sé. Pero me quedé sin un laburo hace dos meses, hoy no puedo pagar todo." },
+    { "role": "user", "text": "Bueno, pero las facturas hay que pagarlas igual, eso lo tendría que haber previsto. ¿Por qué no pagó?" },
+    { "role": "assistant", "text": "Te acabo de decir, me quedé sin trabajo." },
+    { "role": "user", "text": "Ajá. ¿Y no puede hacer el esfuerzo y pagar todo esta semana? Es lo mejor para usted." },
+    { "role": "assistant", "text": "No, no puedo. A fin de mes me entra algo, nada más." },
+    { "role": "user", "text": "Bueno, si no queda otra, se puede en cuotas. Pague cuando pueda y después llame." },
+    { "role": "assistant", "text": "¿Pero cuánto pago? ¿Me das algún número?" },
+    { "role": "user", "text": "Eso lo ve cuando llame. Buenas tardes." }
+  ]
+}

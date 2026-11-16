@@ -39,6 +39,11 @@
   const firstName = n => (n || "").split(/\s+/)[0] || n;
   const enPersona = e => T.prompts.enPersona(e);
   const clientName = e => (e.cliente || "El cliente").split(",")[0].trim();
+  // "Lo que tenés a mano" (campo `ficha` del escenario): una línea por dato, con "Título: texto" opcional.
+  const fichaItems = e => String((e && e.ficha) || "").split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const m = l.match(/^([^:"]{2,40}):\s*(.+)$/);
+    return m ? { titulo: m[1], texto: m[2] } : { titulo: "", texto: l };
+  });
   // Quién arranca la llamada (ver prompts.js): "atiende" = entrante, "llama" = saliente.
   const INICIO_LLAMADA = {
     atiende: { brief: "Llamada entrante: cuando arranca, atendés vos y saludás primero.", espera: "Atendiste la llamada: saludá vos primero" },
@@ -62,6 +67,7 @@
     check: '<circle cx="10" cy="10" r="7"/><path d="M7 10l2 2 4-4"/>',
     chevron: '<path d="M5 8l5 5 5-5"/>',
     x: '<path d="M5 5l10 10M15 5 5 15"/>',
+    copy: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"/>',
     mic: '<rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5"/>',
     micOff: '<path d="M3 3l14 14"/><path d="M7 7v2.5a3 3 0 0 0 5 2.2M13 9V5.5a3 3 0 0 0-5.8-1"/><path d="M4.5 9.5a5.5 5.5 0 0 0 9 4.2M15.5 9.5c0 .6-.1 1.2-.3 1.7M10 15v2.5"/>',
     keyboard: '<rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8h1M8.5 8h1M11.5 8h1M14.5 8h0M6 12h8"/>',
@@ -69,6 +75,7 @@
     phone: '<path d="M5.2 3h2.6l1.3 3.4-1.7 1.1a8.5 8.5 0 0 0 5.1 5.1l1.1-1.7 3.4 1.3v2.6a1.6 1.6 0 0 1-1.7 1.6A13.5 13.5 0 0 1 3.6 4.7 1.6 1.6 0 0 1 5.2 3z"/>',
     hangup: '<path d="M2.5 11.5c4.2-4 10.8-4 15 0l-1.9 2.3-3.1-1.3v-2.1a9 9 0 0 0-5 0v2.1l-3.1 1.3z"/>',
     play: '<path d="M6 4l10 6-10 6z"/>',
+    stop: '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>',
     download: '<path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 17h12"/>',
     back: '<path d="M12 4 6 10l6 6"/>',
     trash: '<path d="M4 6h12M8 6V4h4v2M6 6l1 11h6l1-11"/>',
@@ -78,6 +85,9 @@
     down: '<path d="M5 8l5 5 5-5"/>'
   };
   const icon = k => svg(ICON[k]);
+  // Filtros de las listas de informes: los días como los da el campo de fecha ("2026-11-10") y los textos tal cual.
+  const filtrosVacios = () => ({ desde: "", hasta: "", escenario: "", candidato: "" });
+  const hayFiltros = v => Object.values(v).some(Boolean);
 
   // ------------------------------------------------------------------
   // Estado
@@ -91,7 +101,9 @@
     usuario: null,      // /api/yo: { id, usuario, nombre, rol, debeCambiar }
     candidato: "",      // el nombre sale de la sesión
     voiceName: "",
-    informes: [],
+    informes: [],       // todos los informes del candidato, sin filtros (los últimos se ven en el inicio)
+    filtros: { misinformes: filtrosVacios(), informes: filtrosVacios() },   // lo elegido en cada lista de informes
+    listaInformes: { huella: null, items: [] },   // última lista filtrada que devolvió el servidor, y para qué búsqueda
     dirty: false,
     engine: null,
     timer: null,
@@ -250,20 +262,190 @@
     return list;
   }
 
+  // ------------------------------------------------------------------
+  // Listas de informes con filtros ("Mis informes" del candidato e "Informes" de la empresa)
+  // ------------------------------------------------------------------
+  // Barra de filtros. No le pide nada al servidor: deja lo elegido en `valores` y avisa con alCambiar().
+  // `acciones` son botones que van al final de la barra (los de exportar); la barra no sabe qué hacen.
+  function barraFiltros({ valores, conCandidato, alCambiar, acciones = [] }) {
+    const desde = h("input", { type: "date", id: "fDesde", value: valores.desde });
+    const hasta = h("input", { type: "date", id: "fHasta", value: valores.hasta });
+    const escenario = h("select", { id: "fEscenario" });
+    const candidato = conCandidato ? h("input", { type: "search", id: "fCandidato", list: "fCandidatos", placeholder: "Todos", autocomplete: "off", value: valores.candidato }) : null;
+    const nombres = conCandidato ? h("datalist", { id: "fCandidatos" }) : null;
+    const limpiar = h("button", { class: "btn-o", type: "button", id: "fLimpiar", text: "Limpiar", disabled: !hayFiltros(valores) });
+    const aviso = errorForm("");
+    let espera = null;
+
+    // Las opciones llegan del servidor después de dibujar. La simulación elegida se mantiene aunque ya no esté en la lista.
+    function ponerOpciones(op) {
+      const titulos = [...new Set([...(op.escenarios || []), valores.escenario].filter(Boolean))];
+      escenario.replaceChildren(h("option", { value: "", text: "Todas" }), ...titulos.map(t => h("option", { value: t, text: t })));
+      escenario.value = valores.escenario;
+      if (nombres) nombres.replaceChildren(...(op.candidatos || []).map(n => h("option", { value: n })));
+    }
+    function cambio() {
+      const alReves = Boolean(valores.desde && valores.hasta && valores.desde > valores.hasta);
+      aviso.textContent = alReves ? "“Desde” no puede ser posterior a “Hasta”." : "";
+      aviso.hidden = !alReves;
+      limpiar.disabled = !hayFiltros(valores);
+      if (!alReves) alCambiar();
+    }
+    desde.addEventListener("change", () => { valores.desde = desde.value; cambio(); });
+    hasta.addEventListener("change", () => { valores.hasta = hasta.value; cambio(); });
+    escenario.addEventListener("change", () => { valores.escenario = escenario.value; cambio(); });
+    // Al escribir el nombre se espera a que la persona deje de tipear, para no pedir la lista con cada letra.
+    if (candidato) candidato.addEventListener("input", () => {
+      valores.candidato = candidato.value.trim();
+      clearTimeout(espera); espera = setTimeout(cambio, 300);
+    });
+    limpiar.addEventListener("click", () => {
+      Object.assign(valores, filtrosVacios());
+      desde.value = hasta.value = escenario.value = "";
+      if (candidato) candidato.value = "";
+      clearTimeout(espera); cambio();
+    });
+    ponerOpciones({});
+
+    const el = h("div", { class: "filtros", role: "search", "aria-label": "Filtrar informes" },
+      field("Desde", "", desde), field("Hasta", "", hasta), field("Simulación", "", escenario),
+      candidato ? field("Candidato", "", candidato) : null, nombres, limpiar,
+      acciones.length ? h("div", { class: "acciones" }, ...acciones) : null, aviso);
+    return { el, ponerOpciones, cerrar: () => clearTimeout(espera) };
+  }
+
+  // Le entrega al navegador un archivo ya bajado, para que lo guarde con ese nombre.
+  function guardarArchivo(blob, nombre) {
+    const url = URL.createObjectURL(blob);
+    const enlace = h("a", { href: url, download: nombre, hidden: true });
+    document.body.append(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Lista de informes con su barra de filtros. Devuelve los elementos para agregar a la vista.
+  //   clave        dónde quedan los filtros elegidos (S.filtros[clave]): siguen puestos al volver de un informe.
+  //   fijo         filtro que la persona no elige (la empresa cargada).
+  //   conCandidato muestra el filtro por candidato y el nombre en cada fila (solo la empresa).
+  //   exportable   agrega los botones para bajar el listado a Excel y PDF (solo la empresa).
+  //   sinNada      texto cuando no hay ningún informe y no hay filtros puestos.
+  function listaDeInformes({ clave, fijo, conCandidato, exportable, sinNada }) {
+    const valores = S.filtros[clave];
+    const lista = h("div", { class: "informes-lista", "aria-live": "polite" });
+    // Se exporta lo que está en pantalla: la búsqueda de la lista que se ve (`mostrado`), no lo que se está tipeando.
+    let mostrado = null, exportando = false;
+    const botones = !exportable ? [] : [["xlsx", "Excel"], ["pdf", "PDF"]].map(([formato, nombre]) => {
+      return h("button", { class: "btn-o", type: "button", id: "exportar-" + formato, title: `Bajar esta lista en ${nombre}`, disabled: true,
+        onclick: () => exportar(formato, nombre) }, icon("download"), nombre);
+    });
+    const habilitarBotones = () => botones.forEach(b => { b.disabled = exportando || !mostrado || !mostrado.cantidad; });
+    async function exportar(formato, nombre) {
+      if (exportando || !mostrado) return;
+      // Mientras se genera no se puede pedir otro. El aviso queda hasta que lo reemplaza el del resultado
+      // (el texto del botón no cambia: al ser más largo movía de lugar toda la barra).
+      exportando = true; habilitarBotones();
+      toast(`Generando el ${nombre}…`, 120000);
+      try {
+        const archivo = await T.api.informes.exportar(formato, mostrado.filtro);
+        guardarArchivo(archivo.blob, archivo.nombre);
+        toast(`Listo: ${archivo.cantidad === 1 ? "1 informe" : archivo.cantidad + " informes"} en ${archivo.nombre}.`, 4000);
+      } catch (err) {
+        toast("No se pudo exportar: " + T.api.errorCopy(err), 5000);
+      } finally {
+        exportando = false; habilitarBotones();
+      }
+    }
+
+    const barra = barraFiltros({ valores, conCandidato, alCambiar: buscar, acciones: botones });
+    barra.el.hidden = true;
+    let pedido = 0, pintada = false;
+
+    function pintar(items, filtro) {
+      pintada = true;
+      mostrado = { filtro, cantidad: items.length };
+      habilitarBotones();
+      // Sin informes y sin filtros no hay nada que filtrar: queda solo el mensaje.
+      barra.el.hidden = !items.length && !hayFiltros(valores);
+      lista.replaceChildren(items.length ? reportList(items, conCandidato)
+        : h("p", { class: "muted", text: hayFiltros(valores) ? "No hay informes con estos filtros." : sinNada }));
+    }
+    async function buscar() {
+      const mio = ++pedido;
+      const filtro = Object.assign(T.core.rangoDeDias(valores.desde, valores.hasta), { candidato: valores.candidato, escenario: valores.escenario }, fijo);
+      const huella = JSON.stringify([S.usuario.id, filtro]);
+      // Si ya está guardada la lista de esta misma búsqueda (por ejemplo, al volver de un informe),
+      // se muestra al instante y se actualiza por detrás. Si es otra búsqueda, queda la anterior hasta que llegue.
+      if (S.listaInformes.huella === huella) pintar(S.listaInformes.items, filtro);
+      else if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "Cargando…" }));
+      try {
+        const items = await T.api.informes.list(filtro);
+        if (mio !== pedido) return;   // llegó tarde: ya se pidió una búsqueda más nueva
+        S.listaInformes = { huella, items };
+        if (lista.isConnected) pintar(items, filtro);
+      } catch (err) {
+        if (mio !== pedido || !lista.isConnected) return;
+        if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "No se pudieron cargar los informes." }));
+        toast("No se pudieron actualizar los informes: " + T.api.errorCopy(err));
+      }
+    }
+    buscar();
+    T.api.informes.opciones(fijo).then(op => { if (lista.isConnected) barra.ponerOpciones(op); }).catch(() => {});
+    S.alSalirDeVista = barra.cerrar;
+    return [barra.el, lista];
+  }
+
   VIEWS.misinformes = view => {
     const col = h("div", { class: "col", style: "padding-top:20px" });
-    col.append(h("h1", { text: "Mis informes", style: "font-size:24px;font-weight:600" }));
-    const mine = S.informes.filter(r => r.candidato === S.candidato);
-    col.append(mine.length ? reportList(mine) : h("p", { class: "muted", text: "Todavía no hiciste ninguna simulación." }));
+    col.append(h("h1", { text: "Mis informes", style: "font-size:24px;font-weight:600" }),
+      ...listaDeInformes({ clave: "misinformes", conCandidato: false, sinNada: "Todavía no hiciste ninguna simulación." }));
     view.append(col);
   };
 
   // ------------------------------------------------------------------
   // ESTUDIANTE: antes de la llamada
   // ------------------------------------------------------------------
+  // Lista de "Lo que tenés a mano". En la llamada (copiar: true), cada dato tiene su botón para copiarlo.
+  function fichaLista(items, { copiar = false } = {}) {
+    return h("ul", { class: copiar ? "tips ficha-lista" : "tips" }, ...items.map(it => {
+      const dato = [it.titulo ? h("b", { text: it.titulo + ": " }) : null, it.texto];
+      if (!copiar) return h("li", null, ...dato);
+      return h("li", null, h("span", null, ...dato),
+        h("button", { class: "copiar", type: "button", title: "Copiar", "aria-label": `Copiar: ${it.titulo || it.texto.slice(0, 40)}`, onclick: () => copiarTexto(it.texto) }, icon("copy")));
+    }));
+  }
+  async function copiarTexto(texto) {
+    try { await navigator.clipboard.writeText(texto); toast("Copiado."); }
+    catch (_) { toast("El navegador no dejó copiar: seleccioná el texto a mano."); }
+  }
+
+  // Grabación de la simulación (opcional). Lo que acepta el candidato queda guardado en el informe:
+  // el texto exacto que leyó y su versión. Si se cambia el texto, hay que cambiar la versión.
+  const GRABACION = {
+    version: "2026-11-11",
+    titulo: "Grabar el audio de esta simulación (opcional)",
+    explicacion: (empresa, dias) => `Si aceptás, se graba tu voz y la del cliente simulado para que en el informe se puedan escuchar los fragmentos destacados. Lo vas a poder escuchar vos y lo va a poder escuchar ${empresa}. Se borra a los ${dias} días. Si no aceptás, la simulación y el informe funcionan igual, sin audio.`,
+    casilla: "Acepto que se grabe el audio de esta simulación."
+  };
+  // La casilla del brief. Arranca sin marcar en cada simulación: la aceptación vale solo para esa llamada.
+  // Deja en S.grabacion lo que se le mostró a la persona y lo que respondió.
+  function casillaDeGrabacion() {
+    const explicacion = GRABACION.explicacion(S.cfg.empresa, (S.server.audio && S.server.audio.dias) || 90);
+    S.grabacion = { aceptado: false, version: GRABACION.version, texto: [GRABACION.titulo, explicacion, GRABACION.casilla].join("\n"), fecha: new Date().toISOString() };
+    const casilla = h("input", { type: "checkbox", id: "aceptaGrabacion", onchange: ev => {
+      S.grabacion.aceptado = ev.target.checked;
+      S.grabacion.fecha = new Date().toISOString();
+    } });
+    return h("div", { class: "grabacion" },
+      h("div", { class: "eyebrow", text: GRABACION.titulo }),
+      h("p", { text: explicacion }),
+      h("label", { for: "aceptaGrabacion" }, casilla, GRABACION.casilla));
+  }
+
   VIEWS.brief = view => {
     const e = S.cfg.escenarios.find(x => x.id === S.params.id);
     if (!e) return go("sims");
+    S.grabacion = null;   // la grabación se ofrece (y se acepta o no) de nuevo en cada simulación
     const sup = T.voice.support();
     const col = h("div", { class: "col brief" });
     col.append(h("button", { class: "btn-o", style: "align-self:flex-start", onclick: () => go("sims") }, icon("back"), "Volver"));
@@ -271,13 +453,9 @@
     col.append(h("div", { class: "info" },
       h("div", null, h("div", { class: "eyebrow", text: "Con quién hablás" }), h("p", { text: e.cliente }))));
     // Lo que un operador ve en el sistema y las reglas de la campaña: sin esto no sabe qué ofrecer ni qué validar.
-    const ficha = String(e.ficha || "").split("\n").map(l => l.trim()).filter(Boolean);
+    const ficha = fichaItems(e);
     if (ficha.length) col.append(h("div", { class: "info una" },
-      h("div", null, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }),
-        h("ul", { class: "tips" }, ...ficha.map(l => {
-          const m = l.match(/^([^:"]{2,40}):\s*(.+)$/);
-          return m ? h("li", null, h("b", { text: m[1] + ": " }), m[2]) : h("li", { text: l });
-        })))));
+      h("div", null, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }), fichaLista(ficha))));
     if (e.glosario && e.glosario.length) col.append(h("div", { class: "info" },
       h("div", null, h("div", { class: "eyebrow", text: "Palabras que vas a escuchar" }),
         h("ul", { class: "tips" }, ...e.glosario.map(g => h("li", null, h("b", { text: g.termino + ": " }), g.significa))))));
@@ -314,6 +492,8 @@
       col.append(h("div", { class: "voice-row" }, h("label", { for: "voiceSel", class: "muted", text: "Voz del cliente" }), sel, test));
     }
     col.append(pruebaDeAudio(motorDeVoz() === "gemini-live"));
+    // Solo con Gemini Live se pueden grabar las dos voces: con las otras voces no se ofrece.
+    if (motorDeVoz() === "gemini-live" && T.audio.sePuedeGrabar()) col.append(casillaDeGrabacion());
     col.append(h("div", null, h("button", { class: "btn lg", id: "startCall", disabled: !S.server.hasKey, onclick: () => go("call", { id: e.id }) }, icon(enPersona(e) ? "esc" : "phone"), enPersona(e) ? "Empezar conversación" : "Empezar llamada")));
     view.append(col);
   };
@@ -446,6 +626,14 @@
     const provider = motorDeVoz();
     const turns = [];
     let muted = false, started = Date.now(), showTx = false;
+    // Grabación: solo con Gemini Live y solo si el candidato marcó la casilla del brief.
+    const grabacion = provider === "gemini-live" && T.audio.sePuedeGrabar() ? S.grabacion : null;
+    const grabadora = grabacion && grabacion.aceptado ? T.audio.crearGrabadora() : null;
+    // En qué segundo de la grabación empieza y termina cada turno (sin grabación, los turnos no llevan tiempos).
+    const cronometro = T.core.cronometroDeTurnos();
+    const segundoDeGrabacion = () => (grabadora ? grabadora.ahora() : null);
+    const grabando = h("span", { class: "grabando", role: "status", hidden: true, text: "Grabando" });
+    const empezarAGrabar = () => { if (grabadora) { grabadora.empezar(); grabando.hidden = !grabadora.grabando; } };
 
     const orb = h("div", { class: "orb big connecting", role: "button", tabindex: "0", "aria-label": `Interrumpir a ${cName}` });
     const stateLbl = h("div", { class: "state-label", role: "status", "aria-live": "polite", text: "Conectando…" });
@@ -459,6 +647,13 @@
     const kbBtn = h("button", { class: "round", "aria-label": "Escribir en vez de hablar", "aria-pressed": "false", "aria-expanded": "false", title: "Escribir en vez de hablar" }, icon("keyboard"));
     const txBtn = h("button", { class: "round", "aria-label": "Ver transcripción", "aria-pressed": "false", title: "Ver transcripción" }, icon("list"));
     const hang = h("button", { class: "hang", id: "hang" }, icon("hangup"), enPersona(e) ? "Terminar" : "Colgar");
+    // "Lo que tenés a mano" durante la llamada: los datos del brief, que nadie retiene con solo leerlos antes.
+    const ficha = fichaItems(e);
+    const fichaPanel = ficha.length ? h("aside", { class: "ficha-panel", id: "fichaPanel", hidden: true, "aria-label": "Lo que tenés a mano" },
+      h("div", { class: "ficha-head" }, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }),
+        h("button", { class: "cerrar", type: "button", title: "Cerrar", "aria-label": "Cerrar lo que tenés a mano", onclick: () => mostrarFicha(false) }, icon("x"))),
+      fichaLista(ficha, { copiar: true })) : null;
+    const fichaBtn = fichaPanel ? h("button", { class: "round", "aria-label": "Lo que tenés a mano", "aria-expanded": "false", "aria-controls": "fichaPanel", title: "Lo que tenés a mano", onclick: () => mostrarFicha(fichaPanel.hidden) }, icon("reports")) : null;
     // Llamada por teléfono con un cliente: suena el timbre y el candidato atiende con un botón (entrante),
     // o escucha el tono de llamada hasta que el cliente atiende (saliente, "llama").
     const porTelefono = !enPersona(e) && !T.prompts.esLider(e);
@@ -476,15 +671,32 @@
 
     // Mientras suena, la pantalla muestra solo el timbre y el botón verde, al centro (.call.sonando).
     const llamada = h("div", { class: sonando ? "call sonando" : "call" },
-      h("div", { class: "call-top" }, h("div", { class: "who" }, h("b", { text: cName }), h("span", { text: e.titulo })), timer),
+      h("div", { class: "call-top" }, h("div", { class: "who" }, h("b", { text: cName }), h("span", { text: e.titulo })), h("div", { class: "reloj" }, grabando, timer)),
       h("div", { class: "stage" }, orb, stateLbl, sonando ? atender : null, cap, capU, note),
-      h("div", { class: "controls" }, micBtn, hang, kbBtn, txBtn),
-      typebar, txList);
+      h("div", { class: "controls" }, micBtn, hang, kbBtn, txBtn, fichaBtn),
+      typebar, txList, fichaPanel);
     view.append(llamada);
     const yaAtendio = () => { sonando = false; llamada.classList.remove("sonando"); atender.remove(); };
 
+    // Abierto o cerrado queda guardado por usuario: si lo usó en la llamada anterior, arranca abierto.
+    function mostrarFicha(abrir) {
+      if (!fichaPanel) return;
+      fichaPanel.hidden = !abrir;
+      llamada.classList.toggle("con-ficha", abrir);
+      fichaBtn.classList.toggle("on", abrir);
+      fichaBtn.setAttribute("aria-expanded", String(abrir));
+      store.set(k("fichaAbierta"), abrir);
+      if (!abrir && fichaPanel.contains(document.activeElement)) fichaBtn.focus();
+    }
+    if (fichaPanel) {
+      if (store.get(k("fichaAbierta"), false)) mostrarFicha(true);
+      const alEsc = ev => { if (ev.key === "Escape" && !fichaPanel.hidden) mostrarFicha(false); };
+      document.addEventListener("keydown", alEsc);
+      S.alSalirDeVista = () => document.removeEventListener("keydown", alEsc);
+    }
+
     function addTx(role, text) {
-      turns.push({ role, text });
+      turns.push(Object.assign({ role, text }, cronometro.cerrar(role, segundoDeGrabacion())));
       txList.append(h("div", { class: "ln " + (role === "user" ? "u" : "c") }, h("b", { text: role === "user" ? firstName(S.candidato) : cName }), text));
     }
     function abrirTeclado(foco) {
@@ -507,12 +719,14 @@
       escenario: e,
       telefono: S.cfg.vozTelefonica !== false,
       entrada: S.audio && S.audio.entrada,
-      salida: S.audio && S.audio.salida
+      salida: S.audio && S.audio.salida,
+      grabadora
     });
     S.engine = engine;
 
     function onEvent(ev) {
       if (S.engine !== engine) return;
+      if (grabadora && ev.type !== "level") { cronometro.evento(ev, segundoDeGrabacion()); grabando.hidden = !grabadora.grabando; }
       switch (ev.type) {
         case "state":
           if (sonando) { if (ev.state === "listening") atender.disabled = false; break; }
@@ -557,7 +771,7 @@
             abrirTeclado(true);
           }
           break;
-        case "end": finishCall(e, turns, Math.round((Date.now() - started) / 1000), ev.reason); break;
+        case "end": finishCall(e, turns, Math.round((Date.now() - started) / 1000), ev.reason, { grabacion, grabadora }); break;
       }
     }
 
@@ -593,7 +807,8 @@
     clearInterval(S.timer);
     S.timer = setInterval(() => { timer.textContent = fmtDur((Date.now() - started) / 1000); }, 500);
     let arranco = false;
-    const arrancar = () => { arranco = true; engine.start({ system: T.prompts.voz(S.cfg, e, S.candidato), firstUserTurn: T.prompts.vozInicio(e), onEvent }); };
+    // Se graba desde que la llamada está atendida: mientras suena el teléfono (y la voz conecta por detrás), todavía no.
+    const arrancar = () => { arranco = true; if (!sonando) empezarAGrabar(); engine.start({ system: T.prompts.voz(S.cfg, e, S.candidato), firstUserTurn: T.prompts.vozInicio(e), onEvent }); };
     pararTimbre();
     if (!porTelefono) return arrancar();
     const salidaElegida = provider === "gemini-live" && S.audio ? S.audio.salida : "";
@@ -630,6 +845,7 @@
       pararTimbre();
       note.hidden = true;
       conectoLaLinea();
+      empezarAGrabar();
       if (!conectaMientrasSuena) return arrancar();
       if (!muted) engine.setMuted(false);
       onEvent({ type: "state", state: engine.state });
@@ -672,13 +888,16 @@
     if (S.engine) { const en = S.engine; S.engine = null; try { en.stop("user"); } catch (_) {} }
   }
 
-  function finishCall(e, turns, seconds, reason) {
+  // audio: { grabacion, grabadora } de la llamada. La aceptación (o el no) viaja con la llamada para quedar en el
+  // informe; la grabación es una promesa, porque la grabadora tarda un instante en entregar el archivo.
+  function finishCall(e, turns, seconds, reason, audio) {
     pararTimbre(); pararLinea();
     clearInterval(S.timer);
     S.engine = null;
     const userTurns = turns.filter(t => t.role === "user").length;
-    S.lastCall = { escenario: e, turns: turns.slice(), seconds, reason, simulacion: S.simulacion };
-    if (userTurns < 2) return go("corta", { id: e.id });
+    const { grabacion = null, grabadora = null } = audio || {};
+    S.lastCall = { escenario: e, turns: turns.slice(), seconds, reason, simulacion: S.simulacion, grabacion, audio: grabadora ? grabadora.terminar() : null };
+    if (userTurns < 2) { S.lastCall.audio = null; return go("corta", { id: e.id }); }   // sin informe no se guarda ninguna grabación
     go("evaluating");
   }
 
@@ -730,6 +949,8 @@
           puntaje: p.puntaje, criteriosPuntuados: p.cubiertos,
           transcripcion: call.turns
         };
+        // Si se le ofreció grabar, queda en el informe lo que leyó y lo que respondió (sí o no).
+        if (call.grabacion) report.consentimientoAudio = call.grabacion;
         call.pendingReport = report;
       }
       try {
@@ -740,11 +961,16 @@
       } catch (err) {
         throw new Error("La valoración está lista, pero no se pudo guardar en Empresa → Informes. Reintentá para guardarla sin volver a evaluar. " + T.api.errorCopy(err));
       }
+      // El audio se sube después y aparte: si no se puede, el informe ya quedó guardado y se ve igual, sin audio.
+      if (call.audio && vigente()) { const st = box.querySelector(".sub"); if (st) st.textContent = "Guardando el audio de la llamada…"; }
+      const avisoDelAudio = await subirAudioDe(call, report);
       const resumen = { id: report.id, candidato: report.candidato, escenario: report.escenario.titulo, empresa: report.empresa, fecha: report.fecha, puntaje: report.puntaje };
       S.informes = [resumen, ...S.informes.filter(r => r.id !== report.id)];
+      S.listaInformes.huella = null;   // hay un informe nuevo: la lista filtrada se vuelve a pedir
       S.report = report; S.lastCall = null;
       if (!vigente()) { toast("El informe quedó listo en “Mis informes”."); return; }
       go("report", { id: report.id });
+      if (avisoDelAudio) toast(avisoDelAudio, 6000);
     } catch (err) {
       if (!vigente()) return;
       box.replaceChildren(
@@ -754,6 +980,26 @@
         h("div", { class: "r-actions", style: "justify-content:center" },
           h("button", { class: "btn", onclick: () => go("evaluating") }, "Reintentar"),
           h("button", { class: "btn-o", onclick: () => go("sims") }, "Volver")));
+    }
+  }
+
+  // Sube la grabación de la llamada al informe ya guardado y anota en `report.audio` lo que respondió el servidor.
+  // Devuelve "" si salió bien o no había nada que subir, o el aviso para mostrar si no se pudo.
+  async function subirAudioDe(call, report) {
+    if (!call.audio || report.audio) return "";
+    const grabado = await Promise.resolve(call.audio).catch(() => null);
+    call.audio = null;   // la grabación no queda guardada en el navegador
+    if (!grabado) return "";
+    for (let intento = 1; ; intento++) {
+      try {
+        report.audio = (await T.api.informes.subirAudio(report.id, grabado.blob, grabado.duracionSeg)).audio;
+        return "";
+      } catch (err) {
+        // Un rechazo del servidor (permiso, tamaño, formato) no cambia por reintentar; un corte de conexión, quizás sí.
+        const definitivo = err && err.status && err.status < 500;
+        if (definitivo || intento === 2) return "El informe quedó guardado, pero no se pudo guardar el audio: " + T.api.errorCopy(err);
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
   }
 
@@ -786,7 +1032,10 @@
     if (S.profile === "empresa" && r.id) actions.append(h("button", { class: "btn-o btn-danger", onclick: async () => {
       if (!confirm("¿Eliminar este informe?")) return;
       try { await T.api.informes.remove(r.id); } catch (err) { return toast("No se pudo eliminar: " + T.api.errorCopy(err)); }
-      S.informes = await T.api.informes.list().catch(() => S.informes); go("informes"); toast("Informe eliminado.");
+      // Se saca de lo guardado para que no aparezca al volver; la lista se actualiza sola al abrirse.
+      S.informes = S.informes.filter(x => x.id !== r.id);
+      S.listaInformes.items = S.listaInformes.items.filter(x => x.id !== r.id);
+      go("informes"); toast("Informe eliminado.");
     } }, icon("trash"), "Eliminar"));
     col.append(actions);
 
@@ -798,9 +1047,60 @@
       ring(r.puntaje)));
     if (ev.resumen) col.append(h("p", { class: "r-summary", text: ev.resumen }));
 
+    // Audio de la llamada (si el candidato aceptó que se grabe): junto a cada cita que se pueda ubicar en la
+    // conversación va un botón para escuchar ese momento. El audio se baja recién con el primer clic.
+    const conAudio = Boolean(r.id && r.audio && r.audio.bytes && T.audio.sePuedeEscuchar());
+    const reproductor = conAudio ? T.audio.crearReproductor(() => T.api.informes.audio(r.id)) : null;
+    if (reproductor) S.alSalirDeVista = () => reproductor.cerrar();
+    let citasConAudio = 0;
+    // `palabras` son los elementos de cada palabra de la cita: se van iluminando a medida que suena.
+    function botonEscuchar(tramo, palabras) {
+      citasConAudio++;
+      let tiempos = [], cuadro = 0;
+      const iluminar = () => {
+        const ahora = reproductor.segundo();
+        palabras.forEach((palabra, i) => palabra.classList.toggle("dicha", ahora != null && ahora >= tiempos[i]));
+        cuadro = ahora == null ? 0 : requestAnimationFrame(iluminar);
+      };
+      const boton = h("button", { class: "escuchar no-print", type: "button", title: "Escuchar este momento de la llamada", "aria-label": "Escuchar este momento de la llamada", "aria-pressed": "false" }, icon("play"));
+      const mostrar = sonando => {
+        if (!sonando) { cancelAnimationFrame(cuadro); cuadro = 0; palabras.forEach(palabra => palabra.classList.remove("dicha")); }
+        boton.replaceChildren(icon(sonando ? "stop" : "play"));
+        boton.classList.toggle("on", sonando);
+        boton.setAttribute("aria-pressed", String(sonando));
+      };
+      boton.addEventListener("click", async () => {
+        if (boton.classList.contains("on")) return reproductor.parar();
+        mostrar(true);
+        try {
+          // El turno puede ser largo y tener silencios: con el volumen de la grabación se busca la parte
+          // donde está la cita (una estimación; el reproductor le suma un margen).
+          const paso = T.core.PASO_VOLUMEN_SEG;
+          const niveles = await reproductor.volumen(tramo.t0, tramo.t1, paso);
+          const cita = T.core.tramoDeCita(niveles, paso, tramo);
+          const deLaCita = niveles.slice(Math.round((cita.t0 - tramo.t0) / paso), Math.round((cita.t1 - tramo.t0) / paso));
+          tiempos = T.core.tiemposDePalabras(deLaCita, paso, cita.t0, palabras.map(palabra => palabra.textContent).join(" "));
+          await reproductor.tocar(cita.t0, cita.t1, () => mostrar(false));
+          if (boton.classList.contains("on") && tiempos.length === palabras.length) iluminar();
+        }
+        catch (err) { mostrar(false); toast("No se pudo escuchar el audio: " + T.api.errorCopy(err), 5000); }
+      });
+      return boton;
+    }
+
     const defs = r.criteriosDef || [];
     const list = h("div", { class: "crit-list" });
     let sinPuntuar = 0;
+    // La cita de un criterio. Si hay audio y está en un turno hablado del candidato, lleva el botón para
+    // escucharla y va palabra por palabra, para iluminarlas mientras suena; si no, es solo el texto.
+    const evidenciaDe = cita => {
+      if (!cita) return ["Sin evidencia en la conversación."];
+      const texto = String(cita).replace(/^["“]+|["”]+$/g, "");
+      const tramo = conAudio ? T.core.ubicarCita(r.transcripcion, cita) : null;
+      if (!tramo) return [`“${texto}”`];
+      const palabras = texto.split(/\s+/).filter(Boolean).map(palabra => h("span", { class: "palabra", text: palabra }));
+      return [botonEscuchar(tramo, palabras), "“", ...palabras.flatMap((palabra, i) => (i ? [" ", palabra] : [palabra])), "”"];
+    };
     defs.forEach((c, i) => {
       const x = T.core.buscarCriterio({ nombre: c.nombre, total: defs.length }, i, ev.criterios || []) || {};
       const p = T.core.puntajeCriterio(x.puntaje);
@@ -812,9 +1112,13 @@
         h("div", { class: "nm" }, c.nombre, h("small", { text: `peso ${c.peso}` })), bars,
         x.comentario ? h("p", { class: "cm", text: x.comentario }) : null,
         x.paraSubir ? h("p", { class: "cm", text: "Para subir: " + x.paraSubir }) : null,
-        h("p", { class: "ev", text: x.evidencia ? `“${String(x.evidencia).replace(/^["“]+|["”]+$/g, "")}”` : "Sin evidencia en la conversación." })));
+        h("p", { class: "ev" }, ...evidenciaDe(x.evidencia))));
     });
-    col.append(h("div", null, h("div", { class: "eyebrow", text: "Criterios de la empresa", style: "margin-bottom:8px" }), list));
+    const diasDeAudio = (S.server && S.server.audio && S.server.audio.dias) || 90;
+    const sobreElAudio = citasConAudio ? "Tocá el botón junto a una cita para escuchar ese momento de la llamada."
+      : r.audio && r.audio.borrado ? `El audio de esta simulación ya se borró: se guarda ${diasDeAudio} días.` : "";
+    col.append(h("div", null, h("div", { class: "eyebrow", text: "Criterios de la empresa", style: "margin-bottom:8px" }),
+      sobreElAudio ? h("p", { class: "r-audio no-print", text: sobreElAudio }) : null, list));
     if (sinPuntuar) col.append(h("div", { class: "notice", text: `La IA no puntuó ${sinPuntuar} de ${defs.length} criterios: el puntaje se calculó solo con los que sí evaluó. Tomalo con pinzas.` }));
 
     const ul = arr => h("ul", null, (arr || []).map(t => h("li", { text: t })));
@@ -1225,19 +1529,10 @@
   VIEWS.informes = view => {
     const col = h("div", { class: "wide cfg" });
     col.append(h("div", { class: "cfg-head" }, h("div", null, h("h1", { text: "Informes de candidatos" }), h("p", { text: "Resultados de las simulaciones. La decisión siempre la toma una persona." }))));
-    const lista = h("div");
-    const mostrar = () => {
-      const deEsta = S.informes.filter(r => !r.empresa || r.empresa === S.cfg.empresa);
-      lista.replaceChildren(deEsta.length ? reportList(deEsta, true) : h("p", { class: "muted", text: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
-    };
-    mostrar();
-    col.append(lista);
+    // Solo los informes de la empresa cargada: ese filtro lo aplica el servidor, junto con los que elige la persona.
+    col.append(...listaDeInformes({ clave: "informes", fijo: { empresa: S.cfg.empresa }, conCandidato: true, exportable: true,
+      sinNada: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
     view.append(col);
-    T.api.informes.list().then(informes => {
-      if (!lista.isConnected) return;
-      S.informes = informes;
-      mostrar();
-    }).catch(err => { if (lista.isConnected) toast("No se pudieron actualizar los informes: " + T.api.errorCopy(err)); });
   };
 
   // ------------------------------------------------------------------
@@ -1412,6 +1707,13 @@
   }
 
   // Con la sesión ya abierta: datos del usuario, configuración, informes y su pantalla de inicio.
+  // Al entrar o salir de una cuenta no queda nada de los informes ni de los filtros de la persona anterior.
+  function olvidarInformes() {
+    S.informes = [];
+    S.filtros = { misinformes: filtrosVacios(), informes: filtrosVacios() };
+    S.listaInformes = { huella: null, items: [] };
+  }
+
   async function entrar() {
     S.usuario = await T.api.auth.yo();
     if (S.usuario.debeCambiar) return go("nuevaClave");
@@ -1422,6 +1724,7 @@
     S.audio = Object.assign({ entrada: "", salida: "" }, store.get(k("audio"), {}));
     J = store.get(k("junior"), { chats: [], current: null });
     S.report = null; S.dirty = false;
+    olvidarInformes();
     let errorConfig = null;
     try { S.server = await T.api.config(); }
     catch (e) { errorConfig = e; S.server = { hasKey: false, models: {}, ia: {}, voice: { provider: "browser" } }; }
@@ -1435,7 +1738,9 @@
     S.cfg = T.core.migrarConfig(S.cfg) || T.core.normalizarConfig(clone(T.DEFAULTS));
     if (!S.cfg.empresa) S.cfg.empresa = T.DEFAULTS.empresa;
     completarDesdeEjemplos(S.cfg);
-    try { S.informes = await T.api.informes.list(); } catch (_) { S.informes = []; }
+    // Los últimos informes se ven en el inicio del candidato. Los otros perfiles no los usan ahí:
+    // la empresa pide su lista (con filtros) al abrir Informes.
+    if (S.profile === "estudiante") { try { S.informes = await T.api.informes.list(); } catch (_) {} }
     go(INICIO[S.profile] || "sims");
     if (errorConfig) toast(T.api.errorCopy(errorConfig));
   }
@@ -1443,7 +1748,8 @@
   async function salir() {
     if (S.dirty && !confirm("Hay cambios sin guardar en la configuración. ¿Salir igual?")) return;
     try { await T.api.auth.salir(); } catch (_) {}
-    S.usuario = null; S.cfg = null; S.report = null; S.informes = []; S.dirty = false;
+    S.usuario = null; S.cfg = null; S.report = null; S.dirty = false;
+    olvidarInformes();
     J = { chats: [], current: null };
     go("login");
   }

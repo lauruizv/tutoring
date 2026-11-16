@@ -10,7 +10,8 @@
    Si Playwright no está instalado, las pruebas se saltean con un aviso en vez de fallar. */
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { startApp, pedir, ingresarEn, salirEn, CLAVE_PRUEBA, configEjemplo, atenderEn } from "./helpers.mjs";
+import fs from "node:fs";
+import { startApp, pedir, ingresarEn, salirEn, CLAVE_PRUEBA, configEjemplo, atenderEn, vozSimuladaEn, vozSimuladaDe, vozRealEn } from "./helpers.mjs";
 
 let chromium = null;
 try { ({ chromium } = await import("playwright")); } catch (_) {}
@@ -97,6 +98,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await page.locator("#startCall").click();
     await atenderEn(page);
     await esperarVista("Llamada en curso");
+    assert.equal(await page.locator('button[aria-label="Lo que tenés a mano"]').count(), 0, "sin ficha en el escenario no hay botón");
     // El cliente simulado abre la conversación.
     await page.waitForFunction(() => /dos mensajes por cada turno/.test(document.querySelector(".caption").textContent), null, { timeout: 15000 });
 
@@ -121,7 +123,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await page.locator("#hang").click();
     await esperarVista("Informe");
 
-    assert.equal(await page.locator(".ring .n b").textContent(), "71");
+    assert.equal(await page.locator(".ring .n b").textContent(), "81");
     const criterios = await page.locator(".crit .nm").evaluateAll(ns => ns.map(n => n.firstChild.textContent));
     assert.deepEqual(criterios, ["Escucha y claridad", "Empatía y contención", "Cierre y próximos pasos", "Criterio y autonomía", "Receptividad", "Curiosidad", "Iniciativa"]);
 
@@ -138,12 +140,13 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     const { cuerpo } = await pedir(app.base, "/api/informes");
     assert.equal(cuerpo.length, 1);
     assert.equal(cuerpo[0].candidato, "Lucas Ferreyra");
-    assert.equal(cuerpo[0].puntaje, 71);
+    assert.equal(cuerpo[0].puntaje, 81);
 
     await page.locator('.nav button:has-text("Mis informes")').click();
     await esperarVista("Mis informes");
+    await page.locator(".list button").first().waitFor();   // la lista llega del servidor
     assert.equal(await page.locator(".list button").count(), 1);
-    assert.equal(await page.locator(".score-chip").textContent(), "71/100");
+    assert.equal(await page.locator(".score-chip").textContent(), "81/100");
   });
 
   test("junior: el mentor responde con los bloques [Cómo se hace] [Por qué importa] [Cómo lo hacemos acá] [Tu turno]", async () => {
@@ -214,6 +217,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
   test("empresa: ve el informe del candidato y lo puede eliminar", async () => {
     await page.locator('.nav button:has-text("Informes")').click();
     await esperarVista("Informes de candidatos");
+    await page.locator(".list button").first().waitFor();   // la lista llega del servidor
     assert.equal(await page.locator(".list button").count(), 1);
     await page.locator(".list button").first().click();
     await esperarVista("Informe");
@@ -231,15 +235,27 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await esperarVista("Simulaciones por voz");
     await page.locator(".card").first().click();
     await esperarVista("Simulación");
-    await page.locator("#startCall").click();
-    await atenderEn(page);
-    await esperarVista("Llamada en curso");
-    await page.waitForFunction(() => /hablando/.test(document.querySelector(".state-label").textContent), null, { timeout: 15000 });
+    // Con una voz simulada, para que no dependa de las voces del sistema (el Chromium de Linux no trae ninguna).
+    await vozSimuladaEn(page);
+    try {
+      await page.locator("#startCall").click();
+      await atenderEn(page);
+      await esperarVista("Llamada en curso");
+      await page.waitForFunction(() => /hablando/.test(document.querySelector(".state-label").textContent), null, { timeout: 15000 });
+      const antes = await vozSimuladaDe(page);
+      assert.ok(antes.hablando && antes.dichos.length >= 1, "el cliente está hablando");
+      assert.equal(antes.cortes, 0);
 
-    await page.locator(".orb.big").click();
-    await page.waitForFunction(() => /Te escucho|silenciado/.test(document.querySelector(".state-label").textContent), null, { timeout: 10000 });
-    // Lo que alcanzó a decir queda en la transcripción: no se pierde para la evaluación.
-    assert.ok(await page.locator(".transcript .ln.c").count() >= 1);
+      // force: la esfera late mientras el cliente habla y Playwright esperaría a que se quede quieta,
+      // o sea, a que termine de hablar solo: el clic llegaría tarde y no interrumpiría nada.
+      await page.locator(".orb.big").click({ force: true });
+      await page.waitForFunction(() => /Te escucho|silenciado/.test(document.querySelector(".state-label").textContent), null, { timeout: 10000 });
+      const despues = await vozSimuladaDe(page);
+      assert.equal(despues.hablando, false, "la voz se calló");
+      assert.equal(despues.cortes, 1, "se cortó la voz una vez");
+      // Lo que alcanzó a decir queda en la transcripción: no se pierde para la evaluación.
+      assert.ok(await page.locator(".transcript .ln.c").count() >= 1);
+    } finally { await vozRealEn(page); }
   });
 
   test("si el cliente se despide con [FIN], la llamada se cierra sola", async () => {
@@ -253,7 +269,8 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await campo.press("Enter");
     // Al detectar [FIN] cuelga solo y arranca la evaluación.
     await esperarVista("Informe");
-    assert.equal(await page.locator(".ring .n b").textContent(), "71");
+    // Antes se bajó el peso del primer criterio (de 15 a 1), por eso no da igual que el primer informe.
+    assert.equal(await page.locator(".ring .n b").textContent(), "80");
     // El [FIN] no tiene que quedar escrito en la transcripción del informe.
     const conversacion = await page.locator("details.tx").innerText();
     assert.ok(!/\[FIN\]/.test(conversacion.replace(/DECI:.*/g, "")), "el [FIN] no debería mostrarse");
@@ -398,8 +415,45 @@ describe("ejemplo MKT Contact Center", { skip: saltear }, () => {
     const brief = await page.locator(".brief").innerText();
     assert.match(brief, /lo que tenés a mano/i);
     assert.match(brief, /38\.000/, "el monto de la deuda está antes de llamar");
-    assert.match(brief, /DNI y fecha de nacimiento/);
-    assert.doesNotMatch(brief, /\d{1,2}\.\d{3}\.\d{3}/, "el DNI del cliente no: se lo tiene que pedir");
+    assert.match(brief, /DNI y la fecha de nacimiento/);
+    assert.match(brief, /33\.221\.004/, "en la saliente el operador ve el DNI: se lo dice al cliente para que confirme");
+    await page.locator("button", { hasText: "Volver" }).click();
+    await page.locator(".card", { hasText: "Hace dos días que no tengo internet" }).click();
+    assert.doesNotMatch(await page.locator(".brief").innerText(), /\d{1,2}\.\d{3}\.\d{3}/, "en la entrante el DNI no: se lo tiene que pedir");
+  });
+
+  test("durante la llamada, \"Lo que tenés a mano\" se abre, copia un dato, se cierra con Esc y recuerda cómo quedó", async () => {
+    const ctx = await browser.newContext({ locale: "es-AR", permissions: ["clipboard-read", "clipboard-write"] });
+    const page = await ctx.newPage();
+    await ingresarEn(page, app.base, "estudiante1");
+    const llamar = async () => {
+      await page.locator(".card", { hasText: "Llamada de cobranza" }).click();
+      await page.locator("#startCall").click();
+      await atenderEn(page);
+    };
+    await llamar();
+    const boton = page.locator('button[aria-label="Lo que tenés a mano"]');
+    const panel = page.locator(".ficha-panel");
+    await boton.waitFor();
+    assert.ok(await panel.isHidden(), "arranca cerrado");
+
+    await boton.click();
+    assert.equal(await boton.getAttribute("aria-expanded"), "true");
+    assert.match(await panel.innerText(), /38\.000/, "el monto de la deuda está a mano durante la llamada");
+    await panel.locator("li", { hasText: "8812-461" }).locator("button.copiar").click();
+    assert.match(await page.evaluate(() => navigator.clipboard.readText()), /8812-461/, "copia el número de gestión");
+
+    await page.keyboard.press("Escape");
+    assert.ok(await panel.isHidden(), "Esc lo cierra");
+    assert.equal(await boton.getAttribute("aria-expanded"), "false");
+
+    // Abierto al salir: en la próxima llamada arranca abierto.
+    await boton.click();
+    await page.goto(app.base);
+    await llamar();
+    await panel.waitFor();
+    assert.ok(await panel.isVisible(), "recuerda que lo dejó abierto");
+    await ctx.close();
   });
 
   test("si los escenarios se cargaron antes de que existiera \"Lo que tenés a mano\", igual aparece", async () => {
@@ -417,5 +471,163 @@ describe("ejemplo MKT Contact Center", { skip: saltear }, () => {
     await page.locator("button", { hasText: "Volver" }).click();
     await page.locator(".card", { hasText: "Quiero dar de baja" }).click();
     assert.doesNotMatch(await page.locator(".brief").innerText(), /lo que tenés a mano/i);
+  });
+});
+
+describe("filtros de los informes", { skip: saltear }, () => {
+  let app, browser, lucas, ana;
+  const DIA = 24 * 60 * 60 * 1000;
+  const haceDias = n => new Date(Date.now() - n * DIA).toISOString();
+  const informe = extra => ({
+    duracionSeg: 200, empresa: "Nodo Software", puntaje: 70, evaluacion: { resumen: "r", criterios: [] }, criteriosDef: [], transcripcion: [],
+    escenario: { titulo: "Llamada de cobranza", resumen: "r", cliente: "Diego Sosa", objetivo: "o" }, ...extra
+  });
+  const crear = async (cookie, extra) => assert.equal((await pedir(app.base, "/api/informes", { method: "POST", cookie, json: informe(extra) })).status, 200);
+  const nuevaPagina = async () => (await browser.newContext({ locale: "es-AR" })).newPage();
+  const vista = (page, t) => page.waitForFunction(t => document.getElementById("viewLabel").textContent === t, t, { timeout: 15000 });
+  const filas = (page, n) => page.waitForFunction(n => document.querySelectorAll(".informes-lista .list button").length === n, n, { timeout: 10000 });
+  // El día de hoy menos n, como lo escribe el campo de fecha y en la hora del navegador.
+  const dia = (page, n) => page.evaluate(n => {
+    const d = new Date(); d.setDate(d.getDate() - n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, n);
+
+  before(async () => {
+    app = await startApp({ provider: "gemini" });
+    browser = await chromium.launch();
+    lucas = await app.ingresar("estudiante1"); ana = await app.ingresar("estudiante2");
+    // Lucas: una cobranza de hoy y una baja de hace 10 días.
+    await crear(lucas, { fecha: haceDias(0) });
+    await crear(lucas, { fecha: haceDias(10), escenario: { titulo: "Quiero dar de baja", resumen: "r", cliente: "Marta", objetivo: "o" } });
+  });
+  after(async () => { if (browser) await browser.close(); if (app) await app.stop(); });
+
+  test("quien todavía no hizo ninguna simulación ve el mensaje, sin la barra de filtros", async () => {
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "estudiante2");
+    await page.locator('.nav button:has-text("Mis informes")').click();
+    await vista(page, "Mis informes");
+    await page.getByText("Todavía no hiciste ninguna simulación.").waitFor();
+    assert.ok(await page.locator(".filtros").isHidden());
+  });
+
+  test("el candidato filtra sus informes por simulación y no tiene filtro de candidato", async () => {
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "estudiante1");
+    await page.locator('.nav button:has-text("Mis informes")').click();
+    await vista(page, "Mis informes");
+    await filas(page, 2);
+    assert.equal(await page.locator("#fCandidato").count(), 0, "el candidato no elige candidato");
+    await page.waitForFunction(() => document.querySelectorAll("#fEscenario option").length === 3);
+    assert.deepEqual(await page.locator("#fEscenario option").allTextContents(), ["Todas", "Llamada de cobranza", "Quiero dar de baja"]);
+
+    await page.locator("#fEscenario").selectOption("Quiero dar de baja");
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Quiero dar de baja/);
+
+    // El filtro es de esta lista: el inicio sigue mostrando todas sus simulaciones.
+    await page.locator('.nav button:has-text("Simulaciones")').click();
+    await vista(page, "Simulaciones por voz");
+    assert.equal(await page.locator(".list button").count(), 2);
+  });
+
+  test("la empresa filtra por candidato, simulación y fechas, y los filtros siguen puestos al volver de un informe", async () => {
+    // Ana: una cobranza de hace 3 días. Y un informe de otra empresa, que acá no se tiene que ver.
+    await crear(ana, { fecha: haceDias(3) });
+    await crear(ana, { fecha: haceDias(1), empresa: "Otra Empresa SA", escenario: { titulo: "Escenario de otra empresa", resumen: "r", cliente: "x", objetivo: "o" } });
+
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "empresa1");
+    await vista(page, "Informes de candidatos");
+    await filas(page, 3);
+    await page.waitForFunction(() => document.querySelectorAll("#fCandidatos option").length === 2);
+    assert.deepEqual(await page.locator("#fCandidatos option").evaluateAll(os => os.map(o => o.value)), ["Ana Paz", "Lucas Ferreyra"]);
+    assert.deepEqual(await page.locator("#fEscenario option").allTextContents(), ["Todas", "Llamada de cobranza", "Quiero dar de baja"], "sin las simulaciones de otra empresa");
+    assert.ok(await page.locator("#fLimpiar").isDisabled(), "sin filtros no hay nada que limpiar");
+
+    // Candidato: alcanza con una parte del nombre, sin importar las mayúsculas.
+    await page.locator("#fCandidato").fill("PAZ");
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Ana Paz/);
+    await page.locator("#fCandidato").fill("nadie se llama así");
+    await page.getByText("No hay informes con estos filtros.").waitFor();
+    await page.locator("#fLimpiar").click();
+    await filas(page, 3);
+    assert.equal(await page.locator("#fCandidato").inputValue(), "");
+
+    // Simulación, y el filtro sigue puesto al volver del informe.
+    await page.locator("#fEscenario").selectOption("Quiero dar de baja");
+    await filas(page, 1);
+    await page.locator(".informes-lista .list button").first().click();
+    await vista(page, "Informe");
+    await page.locator("button", { hasText: "Volver" }).click();
+    await vista(page, "Informes de candidatos");
+    await filas(page, 1);
+    assert.equal(await page.locator("#fEscenario").inputValue(), "Quiero dar de baja");
+    await page.locator("#fLimpiar").click();
+    await filas(page, 3);
+
+    // Fechas: "desde hace 5 días" deja afuera el de hace 10; "hasta hace 1 día" deja afuera el de hoy.
+    await page.locator("#fDesde").fill(await dia(page, 5));
+    await filas(page, 2);
+    await page.locator("#fHasta").fill(await dia(page, 1));
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Ana Paz/);
+    // "Hasta hoy" incluye el informe hecho hoy, a cualquier hora.
+    await page.locator("#fHasta").fill(await dia(page, 0));
+    await filas(page, 2);
+    await page.locator("#fDesde").fill(await dia(page, 0));
+    await filas(page, 1);
+    assert.match(await page.locator(".informes-lista .list").innerText(), /Lucas Ferreyra/);
+
+    // El rango al revés avisa y no busca.
+    await page.locator("#fHasta").fill(await dia(page, 4));
+    await page.getByText("“Desde” no puede ser posterior a “Hasta”.").waitFor();
+    await filas(page, 1);
+  });
+
+  test("la empresa baja a PDF y a Excel lo que tiene filtrado; el candidato no tiene esos botones", async () => {
+    const page = await nuevaPagina();
+    await ingresarEn(page, app.base, "empresa1");
+    await vista(page, "Informes de candidatos");
+    await filas(page, 3);
+    await page.locator("#fCandidato").fill("paz");
+    await filas(page, 1);
+
+    // Toca el botón y espera el archivo. El contenido de cada formato se prueba en test/exportar.test.mjs;
+    // acá, que el botón baje un archivo del formato pedido con lo que está en pantalla (1 informe).
+    // El tiempo de espera es largo porque en WSL la primera exportación a Excel tarda (ver CLAUDE.md).
+    const bajar = async formato => {
+      const [descarga] = await Promise.all([page.waitForEvent("download", { timeout: 180000 }), page.locator("#exportar-" + formato).click()]);
+      const archivo = { nombre: descarga.suggestedFilename(), contenido: fs.readFileSync(await descarga.path()) };
+      await page.waitForFunction(n => document.getElementById("toast").textContent === `Listo: 1 informe en ${n}.`, archivo.nombre, { timeout: 10000 });
+      return archivo;
+    };
+    const pdf = await bajar("pdf");
+    assert.match(pdf.nombre, /^informes-\d{4}-\d{2}-\d{2}\.pdf$/);
+    assert.equal(pdf.contenido.subarray(0, 5).toString(), "%PDF-");
+
+    const excel = await bajar("xlsx");
+    assert.match(excel.nombre, /^informes-\d{4}-\d{2}-\d{2}\.xlsx$/);
+    assert.equal(excel.contenido.subarray(0, 2).toString(), "PK", "un .xlsx es un archivo comprimido: empieza con PK");
+    assert.ok(excel.contenido.length > 2000);
+
+    // Al terminar, los botones vuelven a estar disponibles con su nombre.
+    assert.equal(await page.locator("#exportar-xlsx").isDisabled(), false);
+    assert.equal((await page.locator("#exportar-xlsx").innerText()).trim(), "Excel");
+
+    // Sin informes en pantalla no hay nada para bajar.
+    await page.locator("#fCandidato").fill("nadie se llama así");
+    await page.getByText("No hay informes con estos filtros.").waitFor();
+    assert.ok(await page.locator("#exportar-xlsx").isDisabled());
+    assert.ok(await page.locator("#exportar-pdf").isDisabled());
+
+    // El candidato filtra sus informes, pero no los exporta.
+    const candidato = await nuevaPagina();
+    await ingresarEn(candidato, app.base, "estudiante1");
+    await candidato.locator('.nav button:has-text("Mis informes")').click();
+    await vista(candidato, "Mis informes");
+    await filas(candidato, 2);
+    assert.equal(await candidato.locator("#exportar-xlsx, #exportar-pdf").count(), 0);
   });
 });

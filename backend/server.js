@@ -1,10 +1,11 @@
-// Tutoring: servidor mínimo (Node 18+).
+// Tutoring: servidor mínimo (Node 20+).
 // - Sirve la app de /public (src/shared/http/static.js)
 // - Reenvía las consultas al proveedor de IA (Claude vía Agent SDK, Gemini o Claude API).
 //   Las keys viven en .env y nunca llegan al navegador.
 // - Si el proveedor principal falla antes de empezar a responder, reintenta y pasa al de respaldo.
 // - Guarda la configuración de la empresa y los informes en /data
-// Única dependencia: @anthropic-ai/claude-agent-sdk (solo para LLM_PROVIDER=claude-sdk).
+// Dependencias: @anthropic-ai/claude-agent-sdk (solo para LLM_PROVIDER=claude-sdk) y, para exportar los informes,
+// exceljs y pdfmake (se cargan recién cuando alguien exporta; ver src/modules/simulaciones/exportar/).
 // Estructura: src/config (entorno), src/shared (IA, HTTP, utilidades), src/modules (auth, ia, empresa,
 // simulaciones, mentor) y src/routes.js (orden de chequeos de la API). Ver docs/superpowers/specs/2026-10-28-backend-por-capas-design.md.
 const http = require("http");
@@ -15,6 +16,8 @@ const { verificarSesionClaude } = require("./src/shared/llm/providers/claude-sdk
 const { VOICE } = require("./src/shared/voz/voice.config");
 const { sinSecretos } = require("./src/shared/utils/secretos");
 const { auth } = require("./src/modules/auth/sesion");
+const audios = require("./src/modules/simulaciones/services/audios.service");
+const { AUDIO_DIAS } = require("./src/config/limits");
 const { crearApp } = require("./src/app");
 const { handleApi } = require("./src/routes");
 const PORT_ENV = env("PORT");
@@ -54,6 +57,10 @@ process.on("SIGTERM", () => {
 
 server.listen(PORT, HOST, () => {
   console.log(`\n  Tutoring corriendo en  http://localhost:${server.address().port}\n`);
+  audios.programarLimpieza({
+    avisar: n => console.log(`  Audios de simulaciones: se borraron ${n} (vencidos a los ${AUDIO_DIAS} días o sin informe).`),
+    fallo: e => console.error("  No se pudieron limpiar los audios vencidos:", sinSecretos((e && e.message) || e))
+  });
   console.log(`  IA principal: ${descProv(PRIMARY)}`);
   console.log(`  IA de respaldo: ${FALLBACK ? descProv(FALLBACK) : "ninguna (LLM_FALLBACK vacío)"}`);
   console.log(`  Evaluación: ${EVAL_CADENA.map(id => PROVIDERS[id].detalle).join(" → ")}${EVAL_CADENA[0] === "claude-sdk" ? ` · intento en paralelo a los ${Math.round(T_EVAL_CARRERA / 1000)}s si Claude no terminó` : ""}`);

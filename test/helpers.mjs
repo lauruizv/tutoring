@@ -17,10 +17,12 @@ const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // sinUsuarios: arranca con la carpeta de datos vacía (el servidor crea las cuentas de prueba) y entra como empresa-demo.
 // sinIngreso: no inicia sesión al arrancar (para cuando no hay con qué cuenta entrar).
-export async function startApp({ provider = "gemini", key = "clave-de-prueba", env = {}, sinUsuarios = false, sinIngreso = false } = {}) {
+// sembrar(dataDir): deja archivos en la carpeta de datos antes de que arranque el servidor (para probar lo que hace al arrancar).
+export async function startApp({ provider = "gemini", key = "clave-de-prueba", env = {}, sinUsuarios = false, sinIngreso = false, sembrar = null } = {}) {
   const fake = await startFakeLLM();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "tutoring-test-"));
   fs.mkdirSync(path.join(dataDir, "informes"), { recursive: true });
+  if (sembrar) sembrar(dataDir);
   let codigoNuevo = null;
   if (!sinUsuarios) {
     const auth = crearAuth(dataDir);
@@ -129,6 +131,21 @@ export async function pedir(base, ruta, opts = {}) {
   return { status: res.status, cuerpo, texto, headers: res.headers };
 }
 
+// Como pedir, pero para archivos: manda `bytes` tal cual (con su `tipo`) y devuelve la respuesta como Buffer.
+// Si la respuesta es un error en JSON, también viene en `cuerpo`.
+export async function pedirBytes(base, ruta, opts = {}) {
+  const { cookie: _c, bytes, tipo, ...resto } = opts;
+  const res = await fetch(base + ruta, {
+    ...resto,
+    headers: { ...(tipo ? { "content-type": tipo } : {}), ...conSesion(base, opts), ...(opts.headers || {}) },
+    body: bytes
+  });
+  const contenido = Buffer.from(await res.arrayBuffer());
+  let cuerpo = null;
+  try { cuerpo = JSON.parse(contenido.toString("utf8")); } catch (_) {}
+  return { status: res.status, bytes: contenido, cuerpo, headers: res.headers };
+}
+
 // Junta el texto de un streaming de /api/messages, como hace public/js/api.js.
 export async function pedirMensajes(base, payload, opts = {}) {
   const res = await fetch(base + "/api/messages", {
@@ -191,4 +208,66 @@ export async function atenderEn(page) {
   try { await boton.waitFor({ timeout: 3000 }); } catch (_) { return; }
   await page.waitForFunction(() => { const b = document.querySelector("#atender, #llamar"); return !b || !b.disabled; }, null, { timeout: 15000 });
   if (await boton.count()) await boton.click();
+}
+
+// Voz simulada: reemplaza la síntesis del navegador (speechSynthesis) por una que no suena pero se
+// comporta como una voz real: cada frase arranca, dura según su largo y termina, o se corta con cancel().
+// Hace falta porque la voz real depende del sistema: el Chromium de Linux no trae ninguna y falla al instante,
+// así que el cliente nunca llega a estar "hablando". Con esta, la prueba da lo mismo en Windows y en Linux.
+// Deja en window.__vozSimulada lo que pasó: { dichos: [textos], cortes: cuántas veces se cortó, hablando }.
+export async function vozSimuladaEn(page) {
+  await page.evaluate(() => {
+    if (window.__vozSimulada) return;
+    const real = Object.getOwnPropertyDescriptor(window, "speechSynthesis");
+    const registro = { dichos: [], cortes: 0, hablando: false, real };
+    let cola = [], actual = null, reloj = null;
+    const avisar = (frase, tipo, extra) => frase.dispatchEvent(Object.assign(new Event(tipo), extra));
+    function seguir() {
+      if (actual || !cola.length) return;
+      const frase = actual = cola.shift();
+      registro.hablando = true;
+      registro.dichos.push(frase.text);
+      reloj = setTimeout(() => {
+        avisar(frase, "start");
+        // Dura menos que la red de seguridad del motor (1500 ms + 80 ms por letra), que si no la cortaría.
+        reloj = setTimeout(() => { actual = null; registro.hablando = cola.length > 0; avisar(frase, "end"); seguir(); }, Math.max(1500, frase.text.length * 60));
+      }, 20);
+    }
+    const voz = {
+      paused: false,
+      get speaking() { return Boolean(actual); },
+      get pending() { return cola.length > 0; },
+      getVoices: () => [],
+      speak(frase) { cola.push(frase); seguir(); },
+      cancel() {
+        clearTimeout(reloj); reloj = null;
+        const cortadas = [actual, ...cola].filter(Boolean);
+        actual = null; cola = []; registro.hablando = false;
+        if (!cortadas.length) return;
+        registro.cortes++;
+        // Como en Chrome: las frases cortadas avisan con un error "interrupted", un instante después.
+        setTimeout(() => cortadas.forEach(frase => avisar(frase, "error", { error: "interrupted" })), 0);
+      },
+      pause() { voz.paused = true; },
+      resume() { voz.paused = false; },
+      addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true
+    };
+    Object.defineProperty(window, "speechSynthesis", { configurable: true, get: () => voz });
+    window.__vozSimulada = registro;
+  });
+}
+
+// Lo que registró la voz simulada hasta ahora.
+export const vozSimuladaDe = page => page.evaluate(() => { const { dichos, cortes, hablando } = window.__vozSimulada; return { dichos, cortes, hablando }; });
+
+// Vuelve a la voz real del navegador, para que las pruebas que siguen corran como siempre.
+export async function vozRealEn(page) {
+  await page.evaluate(() => {
+    const registro = window.__vozSimulada;
+    if (!registro) return;
+    window.speechSynthesis.cancel();
+    if (registro.real) Object.defineProperty(window, "speechSynthesis", registro.real);
+    else delete window.speechSynthesis;
+    delete window.__vozSimulada;
+  });
 }

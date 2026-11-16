@@ -1,0 +1,40 @@
+{
+  "nombre": "cal-mkt-02-bueno",
+  "descripcion": "Cumple el guion sin errores graves pero sin brillar: valida antes de la deuda, pregunta qué puede pagar, ofrece tres cuotas iguales sin usar lo que contó el cliente, lee el acuerdo, pide la conformidad y da el número. La empatía es una frase de rigor.",
+  "origen": "sintético, para calibrar (no es una conversación real)",
+  "empresa": "mkt",
+  "escenarioId": "mkt-cobranza",
+  "candidato": "Candidato de prueba",
+  "minutos": 5,
+  "esperado": {
+    "total": { "min": 60, "max": 80 },
+    "criterios": {
+      "Escucha activa": { "min": 3, "max": 4 },
+      "Empatía y control emocional": { "min": 2, "max": 3 },
+      "Claridad": { "min": 3, "max": 4 },
+      "Procedimiento": { "min": 3, "max": 5 },
+      "Resolución": { "min": 3, "max": 4 },
+      "Cierre": { "min": 3, "max": 5 }
+    }
+  },
+  "transcripcion": [
+    { "role": "assistant", "text": "¿Hola?" },
+    { "role": "user", "text": "Hola, buen día, habla Lucas de ConectAR. ¿Hablo con Diego Sosa?" },
+    { "role": "assistant", "text": "Sí, soy yo." },
+    { "role": "user", "text": "Para validar tu identidad: en el sistema figura el DNI 33.221.004 y la fecha de nacimiento 9 de noviembre de 1991. ¿Es correcto?" },
+    { "role": "assistant", "text": "Sí, es correcto." },
+    { "role": "user", "text": "Gracias. Te llamo porque tenés dos facturas impagas, agosto y septiembre, por un total de 38.000 pesos." },
+    { "role": "assistant", "text": "Ya sé, ya sé. Me quedé sin laburo hace un par de meses y no llego." },
+    { "role": "user", "text": "Entiendo. ¿Cuánto podrías pagar y cuándo?" },
+    { "role": "assistant", "text": "Algo ahora, poquito. Y a fin de mes cobro." },
+    { "role": "user", "text": "Bueno, te puedo ofrecer un plan de tres cuotas sin interés: dos de 12.700 y una de 12.600, los días 30 de cada mes, empezando este mes. ¿Te parece?" },
+    { "role": "assistant", "text": "Bueno, dale. ¿Por transferencia puede ser?" },
+    { "role": "user", "text": "Sí, te llega el CBU por SMS. Entonces queda así: tres cuotas, 12.700, 12.700 y 12.600, los días 30, por transferencia. ¿Me decís \"sí, acepto\"?" },
+    { "role": "assistant", "text": "Sí, acepto." },
+    { "role": "user", "text": "El número de gestión es 8812-461. ¿Lo anotaste?" },
+    { "role": "assistant", "text": "Sí, ocho ocho uno dos, cuatro seis uno." },
+    { "role": "user", "text": "Bien. ¿Algo más en lo que te pueda ayudar?" },
+    { "role": "assistant", "text": "No, nada más." },
+    { "role": "user", "text": "Bueno, gracias, que tengas buen día." }
+  ]
+}

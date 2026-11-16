@@ -121,7 +121,7 @@ describe("inicio con Postgres", { skip: omitirPg }, () => {
     const c = (await inicio(cEmpA)).cuerpo;
     assert.deepEqual([c.simulaciones, c.gasto], [{ total: 1, enPeriodo: 1 }, { moneda: "USD", total: 2.5, enPeriodo: 2.5 }]);
     assert.deepEqual(c.informesRecientes, [{ id, candidato: "Lucía Paz", escenario: "Reclamo por doble cobro",
-      empresa: "MKT Contact Center", fecha: INFORME_PRUEBA.fecha, puntaje: 78 }]);
+      empresa: "MKT Contact Center", fecha: INFORME_PRUEBA.fecha, puntaje: 78, duracionSeg: INFORME_PRUEBA.duracionSeg }]);
   });
 
   test("no mezcla empresas, ni muestra archivos rotos, informes viejos o de cuentas con contraseña", async () => {

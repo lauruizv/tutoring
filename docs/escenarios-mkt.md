@@ -4,7 +4,7 @@
 
 **Quién arranca la llamada.** En las llamadas entrantes (escenarios 1 a 4) atiende el candidato y saluda primero. En la cobranza (5) llama el candidato: el cliente atiende con un "¿Hola?" y espera que se presente. En el feedback (6) arranca la team leader. Se configura en *Empresa → Escenarios → "Quién arranca la llamada"*.
 
-**Datos para validar la identidad.** Cada cliente tiene un DNI y una fecha de nacimiento que solo conoce la IA: los dice si el candidato se los pide. El candidato no los ve en la pantalla previa, pero sí sabe que los tiene que pedir: lo dice "Lo que tenés a mano".
+**Datos para validar la identidad.** En las llamadas entrantes, cada cliente tiene un DNI y una fecha de nacimiento que solo conoce la IA: los dice si el candidato se los pide. El candidato no los ve en la pantalla previa, pero sí sabe que los tiene que pedir: lo dice "Lo que tenés a mano". En la cobranza (saliente) es al revés: el cliente no sabe quién lo llama, así que no da sus datos. El candidato los ve en "Lo que tenés a mano", se los dice y el cliente confirma. Si se los pide, el cliente desconfía.
 
 **Lo que tenés a mano.** En los escenarios 1 a 5, el brief muestra lo que un operador vería en el sistema y las reglas de la campaña: el saludo, cómo validar la identidad, qué puede ofrecer, los plazos y el número de gestión. Por ejemplo, en la cobranza dice que la deuda es de 38.000 pesos y que se puede ofrecer hasta 3 cuotas. Sin esto, lo evaluábamos por reglas que nunca le dijimos. El texto exacto está en el campo `ficha` de cada escenario en `defaults.js`. **[confirmar con MKT]** qué ve realmente un operador antes de cada llamada.
 
@@ -30,13 +30,14 @@ Cada escenario tiene los mismos campos que usa la app:
 > Todo esto es una suposición razonable de cómo trabaja una campaña de atención. **[confirmar con MKT]**
 
 - **Saludo:** "ConectAR, buen día, te habla (nombre). ¿En qué te puedo ayudar?"
-- **Validación de identidad:** antes de dar o pedir cualquier dato de la cuenta, se pide **DNI del titular y fecha de nacimiento**. Si quien llama no es el titular, solo se dan datos generales (precios, cobertura), nunca datos de la cuenta ni de la deuda.
+- **Validación de identidad:** antes de dar o pedir cualquier dato de la cuenta. Si el cliente llamó, se le piden **DNI del titular y fecha de nacimiento**. Si llamamos nosotros (cobranza), **no se le piden datos personales**: el operador le dice el DNI y la fecha de nacimiento que figuran en el sistema y el cliente confirma. Si quien llama no es el titular, solo se dan datos generales (precios, cobertura), nunca datos de la cuenta ni de la deuda.
 - **Lo que el operador puede hacer:**
   - Pruebas básicas de conexión con el cliente (reiniciar el módem, revisar cables y luces).
   - Abrir un reclamo con número de gestión.
   - Pedir una visita técnica: la primera fecha disponible es en 48 horas hábiles; nunca "hoy".
   - Ofrecer la promoción de retención vigente: 30 % de descuento por 6 meses, una sola vez por cliente.
-  - Ofrecer un plan de pagos de hasta 3 cuotas para deudas de hasta 2 facturas.
+  - Ofrecer un plan de pagos de hasta 3 cuotas sin interés para deudas de hasta 2 facturas. La primera cuota vence dentro de los 30 días. Se paga por transferencia (el CBU llega por SMS), tarjeta de débito o link de pago por WhatsApp.
+- **Guion de cobranza** (procedimiento `p-cobranza` en `defaults.js`): presentación, validación, motivo sin juzgar, preguntar qué puede pagar y cuándo, ofrecer el plan, leer el acuerdo y pedir el "sí, acepto" (queda grabado; no se vuelve a pedir el DNI), dictar el número de gestión y preguntar si hay algo más.
 - **Lo que el operador no puede hacer:**
   - Prometer devoluciones de dinero en el momento: el área de Facturación las resuelve en hasta 72 horas hábiles.
   - Dar fechas que el sistema no le muestra.

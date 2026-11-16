@@ -32,14 +32,23 @@ describe("MKT Contact Center", () => {
     });
   });
 
-  test("el candidato no ve el DNI del cliente en el brief (se lo tiene que pedir)", () => {
-    for (const e of mkt.escenarios) assert.doesNotMatch([e.cliente, e.resumen, e.ficha].join(" "), /\d{1,2}\.\d{3}\.\d{3}/, e.id);
+  test("en las entrantes el candidato no ve el DNI del cliente en el brief (se lo tiene que pedir)", () => {
+    for (const e of mkt.escenarios.filter(x => x.inicio === "atiende")) assert.doesNotMatch([e.cliente, e.resumen, e.ficha].join(" "), /\d{1,2}\.\d{3}\.\d{3}/, e.id);
+  });
+
+  test("en la cobranza el operador no le pide datos al cliente: los ve en el brief y se los dice para que confirme", () => {
+    const e = mkt.escenarios.find(x => x.id === "mkt-cobranza");
+    assert.match(e.ficha, /33\.221\.004/, "el DNI que figura en el sistema");
+    assert.match(e.ficha, /9 de noviembre de 1991/, "la fecha de nacimiento que figura en el sistema");
+    assert.match(e.situacion, /no los des/, "si se los piden, el cliente desconfía");
+    const restricciones = mkt.contextos.find(c => c.clave === "restricciones").contenido;
+    assert.match(restricciones, /salientes nunca se le piden/);
   });
 
   test("en las llamadas con clientes, el brief dice lo que el operador tiene a mano", () => {
     for (const e of mkt.escenarios.filter(x => x.id !== "mkt-feedback-tl")) {
       assert.ok(e.ficha && e.ficha.trim(), `${e.id}: falta la ficha`);
-      assert.match(e.ficha, /DNI y fecha de nacimiento/, `${e.id}: cómo se valida la identidad`);
+      assert.match(e.ficha, /DNI y (la )?fecha de nacimiento/, `${e.id}: cómo se valida la identidad`);
       assert.match(e.ficha, /número de gestión/i, `${e.id}: de dónde sale el número de gestión`);
     }
     const cobranza = mkt.escenarios.find(e => e.id === "mkt-cobranza");
