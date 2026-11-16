@@ -29,9 +29,14 @@ const enAlcance = (informe, alcance) => {
 };
 
 // Lo que se muestra en las listas: nunca el informe entero.
+// usuarioId y email identifican a quien hizo la simulación (los usa la exportación); los informes
+// anteriores a que se guardara el mail, y los de cuentas con contraseña, quedan con email "".
+const textoO = (v, sinDato) => (typeof v === "string" && v ? v : sinDato);
 const aResumen = r => ({
   id: r.id,
+  usuarioId: textoO(r.usuarioId, null),
   candidato: r.candidato,
+  email: textoO(r.email, ""),
   escenario: r.escenario && r.escenario.titulo,
   empresa: r.empresa,
   fecha: r.fecha,

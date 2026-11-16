@@ -6,7 +6,7 @@ const { COLUMNAS } = require("../informes/dto");
 const { relojDe, diaHora } = require("./formato");
 
 const SEGUNDOS_POR_DIA = 86400;
-const ANCHO = { texto: 36, fecha: 18, numero: 15, duracion: 12 };
+const ANCHO = { texto: 36, mail: 36, codigo: 40, fecha: 18, numero: 15, duracion: 12 };
 // Formato de celda de Excel por tipo de columna. "[m]:ss" muestra los minutos totales (75:10, no 1:15:10).
 const FORMATO = { fecha: "dd/mm/yyyy hh:mm", duracion: "[m]:ss" };
 
@@ -22,6 +22,8 @@ function horaDeReloj(fecha, zona) {
 // Los textos van como texto: un nombre que empieza con "=" no se convierte en fórmula.
 const CELDA = {
   texto: v => v || null,
+  mail: v => v || null,
+  codigo: v => v || null,
   fecha: (v, meta) => (v ? horaDeReloj(v, meta.zona) : null),
   numero: v => v,
   duracion: v => (v == null ? null : v / SEGUNDOS_POR_DIA)

@@ -66,6 +66,13 @@ describe("cumple", () => {
     assert.ok(!cumple(r, filtro({ candidato: "gomez" })));
   });
 
+  test("candidato: también encuentra por una parte del mail", () => {
+    const conMail = { ...r, email: "Lucia.Perez@empresa.com" };
+    for (const texto of ["lucia.perez@", "EMPRESA.COM", "perez@emp"]) assert.ok(cumple(conMail, filtro({ candidato: texto })), texto);
+    assert.ok(!cumple(conMail, filtro({ candidato: "otra@empresa.com" })));
+    assert.ok(!cumple(r, filtro({ candidato: "@" })), "un informe sin mail no aparece al buscar un mail");
+  });
+
   test("simulación: tiene que ser el título completo", () => {
     assert.ok(cumple(r, filtro({ escenario: "llamada de cobranza" })));
     assert.ok(!cumple(r, filtro({ escenario: "cobranza" })));
@@ -108,8 +115,9 @@ describe("repositorio de archivos", () => {
   test("devuelve resúmenes (nunca el informe entero), del más nuevo al más viejo, y saltea lo que no es un informe", async () => {
     const lista = await repo.listarResumenes(filtro({}), TODOS);
     assert.deepEqual(lista.map(r => r.id), ["a-lucia-cobranza", "d-otra-empresa", "c-tomas-cobranza", "b-lucia-baja", "e-viejo-sin-usuario"]);
-    assert.deepEqual(lista[0], { id: "a-lucia-cobranza", candidato: "Lucía Pérez", escenario: "Llamada de cobranza", empresa: "MKT Contact Center", fecha: "2026-11-10T15:00:00.000Z", puntaje: 80, duracionSeg: 240 });
+    assert.deepEqual(lista[0], { id: "a-lucia-cobranza", candidato: "Lucía Pérez", escenario: "Llamada de cobranza", empresa: "MKT Contact Center", fecha: "2026-11-10T15:00:00.000Z", puntaje: 80, duracionSeg: 240, usuarioId: "u-lucia", email: "" });
     assert.equal(lista.at(-1).duracionSeg, null, "sin duración guardada queda en null");
+    assert.equal(lista.at(-1).usuarioId, null, "un informe viejo, sin usuario, queda en null");
   });
 
   test("aplica el filtro", async () => {

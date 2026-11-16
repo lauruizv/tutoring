@@ -5,7 +5,7 @@
 //   desde, hasta   instantes ISO o null. Entra lo que cumple  desde <= fecha < hasta.
 //                  El navegador manda el comienzo del día "desde" y el comienzo del día siguiente a "hasta",
 //                  en la hora de la persona: así "hasta el 10" incluye todo el 10.
-//   candidato      texto; alcanza con que el nombre lo contenga, sin importar tildes ni mayúsculas.
+//   candidato      texto; alcanza con que el nombre o el mail lo contengan, sin importar tildes ni mayúsculas.
 //   escenario      título de la simulación; tiene que ser el título completo.
 //   empresa        nombre de la empresa; los informes viejos, sin empresa, pasan igual.
 "use strict";
@@ -50,7 +50,10 @@ function cumple(resumen, filtro) {
     if (filtro.desde && t < Date.parse(filtro.desde)) return false;
     if (filtro.hasta && t >= Date.parse(filtro.hasta)) return false;
   }
-  if (filtro.candidato && !plano(resumen.candidato).includes(plano(filtro.candidato))) return false;
+  if (filtro.candidato) {
+    const buscado = plano(filtro.candidato);
+    if (!plano(resumen.candidato).includes(buscado) && !plano(resumen.email).includes(buscado)) return false;
+  }
   if (filtro.escenario && plano(resumen.escenario) !== plano(filtro.escenario)) return false;
   if (filtro.empresa && resumen.empresa && resumen.empresa !== filtro.empresa) return false;
   return true;

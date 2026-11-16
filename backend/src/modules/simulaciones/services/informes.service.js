@@ -5,7 +5,7 @@ const { isObj } = require("../../../shared/utils/validacion");
 const repo = require("../repositories/informes.repository");
 const simulaciones = require("./simulaciones.service");
 const { exportarInformes } = require("../exportar");
-const { loVe, alcanceDe } = require("../informes/permisos");
+const { loVe, alcanceDe, emailDe } = require("../informes/permisos");
 const { consentimientoDe } = require("../informes/audio-reglas");
 const audios = require("./audios.service");
 
@@ -39,6 +39,10 @@ const exportar = (yo, filtro, { formato, zona }) => exportarInformes({
 async function crear(r, yo) {
   // El nombre sale de la sesión, no de lo que manda el navegador. Los scripts locales lo traen en el pedido.
   if (!yo.local) { r.candidato = yo.nombre; r.usuarioId = yo.id; }
+  // El mail tampoco lo decide el navegador: es el de la sesión, o ninguno.
+  delete r.email;
+  const email = emailDe(yo);
+  if (email) r.email = email;
   if (typeof r.candidato !== "string" || !r.candidato.trim()) return { error: { status: 400, message: "El informe no tiene candidato." } };
   if (!isObj(r.evaluacion)) return { error: { status: 400, message: "El informe no trae la evaluación." } };
   // La aceptación de la grabación queda con la fecha del servidor. El dato del audio no lo manda el navegador:

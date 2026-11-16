@@ -271,7 +271,7 @@
     const desde = h("input", { type: "date", id: "fDesde", value: valores.desde });
     const hasta = h("input", { type: "date", id: "fHasta", value: valores.hasta });
     const escenario = h("select", { id: "fEscenario" });
-    const candidato = conCandidato ? h("input", { type: "search", id: "fCandidato", list: "fCandidatos", placeholder: "Todos", autocomplete: "off", value: valores.candidato }) : null;
+    const candidato = conCandidato ? h("input", { type: "search", id: "fCandidato", list: "fCandidatos", placeholder: "Nombre o mail", autocomplete: "off", value: valores.candidato }) : null;
     const nombres = conCandidato ? h("datalist", { id: "fCandidatos" }) : null;
     const limpiar = h("button", { class: "btn-o", type: "button", id: "fLimpiar", text: "Limpiar", disabled: !hayFiltros(valores) });
     const aviso = errorForm("");
@@ -944,7 +944,7 @@
         report = {
           candidato: S.candidato, fecha: new Date().toISOString(), duracionSeg: call.seconds,
           empresa: cfg.empresa, responsable: T.core.responsableTexto(cfg),
-          escenario: { titulo: e.titulo, resumen: e.resumen, cliente: e.cliente, objetivo: e.objetivo },
+          escenario: { id: e.id, titulo: e.titulo, resumen: e.resumen, cliente: e.cliente, objetivo: e.objetivo },
           criteriosDef: clone(cfg.criterios), evaluacion: ev,
           puntaje: p.puntaje, criteriosPuntuados: p.cubiertos,
           transcripcion: call.turns

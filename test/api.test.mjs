@@ -75,7 +75,9 @@ describe("servidor con Gemini", () => {
     const lista = await pedir(app.base, "/api/informes");
     assert.equal(lista.status, 200);
     const fila = lista.cuerpo.find(r => r.id === id);
-    assert.deepEqual(fila, { id, candidato: "Lucas Ferreyra", empresa: INFORME.empresa, escenario: "Recordatorios duplicados", fecha: INFORME.fecha, puntaje: 78, duracionSeg: 240 });
+    // Una cuenta con contraseña no tiene mail: la fila lleva su id de usuario y el mail vacío.
+    assert.match(fila.usuarioId, /^u_[0-9a-f]+$/);
+    assert.deepEqual(fila, { id, usuarioId: fila.usuarioId, candidato: "Lucas Ferreyra", email: "", empresa: INFORME.empresa, escenario: "Recordatorios duplicados", fecha: INFORME.fecha, puntaje: 78, duracionSeg: 240 });
 
     const uno = await pedir(app.base, `/api/informes/${id}`);
     assert.equal(uno.status, 200);

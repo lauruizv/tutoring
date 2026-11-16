@@ -24,7 +24,7 @@ describe("informes con Postgres", { skip: omitirPg }, () => {
   after(async () => { if (pgApp) await pgApp.cerrar(); });
 
   test("una cuenta de Postgres guarda un informe: queda la simulación con su precio", async () => {
-    const falso = { simulacionId: "falso", empresaId: "otra-empresa", precioUsd: 0, precio_usd: 0 };
+    const falso = { simulacionId: "falso", empresaId: "otra-empresa", precioUsd: 0, precio_usd: 0, email: "inventado@otro.test" };
     const r = await pedir(app.base, "/api/informes", { method: "POST", json: { ...INFORME_PRUEBA, ...falso }, cookie: cEst });
     assert.equal(r.status, 200);
     const sim = (await db.query("SELECT id, empresa_id, usuario_id, precio_usd, escenario_titulo, duracion_seg FROM simulaciones")).rows;
@@ -33,6 +33,9 @@ describe("informes con Postgres", { skip: omitirPg }, () => {
       [A, uEst, "2.50", "Reclamo por doble cobro", 185]);
     const inf = (await pedir(app.base, `/api/informes/${r.cuerpo.id}`, { cookie: cEst })).cuerpo;
     assert.deepEqual([inf.simulacionId, inf.empresaId, inf.candidato], [sim[0].id, A, "Persona Prueba"]);
+    // El mail es el de la cuenta, no el que mande el navegador.
+    const { email } = (await db.query("SELECT email FROM usuarios WHERE id = $1", [uEst])).rows[0];
+    assert.equal(inf.email, email);
   });
 
   test("una cuenta con contraseña guarda como hoy y no registra nada", async () => {
@@ -43,6 +46,7 @@ describe("informes con Postgres", { skip: omitirPg }, () => {
     assert.equal(await cuantas(), antes);
     const guardado = JSON.parse(fs.readFileSync(path.join(app.dataDir, "informes", r.cuerpo.id + ".json"), "utf8"));
     assert.ok(!("simulacionId" in guardado) && !("empresaId" in guardado));
+    assert.ok(!("email" in guardado), "una cuenta con contraseña no tiene mail");
   });
 
   test("borrar el informe no borra la simulación", async () => {

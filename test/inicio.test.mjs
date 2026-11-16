@@ -86,7 +86,7 @@ test("sin Postgres: la empresa con contraseña recibe 409 y el resto de los role
 });
 
 describe("inicio con Postgres", { skip: omitirPg }, () => {
-  let pgApp, app, db, A, B, C, uEstC, cEmpA, cEstA, cJuniorA, cEmpB, cEstB, cEmpC;
+  let pgApp, app, db, A, B, C, uEstA, uEstC, cEmpA, cEstA, cJuniorA, cEmpB, cEstB, cEmpC;
   const inicio = (cookie, q = "") => pedir(app.base, "/api/empresa/inicio" + q, { cookie });
 
   before(async () => {
@@ -95,7 +95,8 @@ describe("inicio con Postgres", { skip: omitirPg }, () => {
     const cookie = id => cookieDe(pgApp.secreto, id);
     A = await crearEmpresa(db, "Empresa A");
     cEmpA = await cookie(await crearUsuario(db, { empresaId: A, rol: "empresa" }));
-    cEstA = await cookie(await crearUsuario(db, { empresaId: A, rol: "estudiante", nombre: "Lucía Paz" }));
+    uEstA = await crearUsuario(db, { empresaId: A, rol: "estudiante", nombre: "Lucía Paz" });
+    cEstA = await cookie(uEstA);
     cJuniorA = await cookie(await crearUsuario(db, { empresaId: A, rol: "junior" }));
     await crearUsuario(db, { empresaId: A, rol: "junior" });
     await crearUsuario(db, { empresaId: A, rol: "junior", activo: false });
@@ -120,7 +121,8 @@ describe("inicio con Postgres", { skip: omitirPg }, () => {
     const { id } = (await pedir(app.base, "/api/informes", { method: "POST", json: INFORME_PRUEBA, cookie: cEstA })).cuerpo;
     const c = (await inicio(cEmpA)).cuerpo;
     assert.deepEqual([c.simulaciones, c.gasto], [{ total: 1, enPeriodo: 1 }, { moneda: "USD", total: 2.5, enPeriodo: 2.5 }]);
-    assert.deepEqual(c.informesRecientes, [{ id, candidato: "Lucía Paz", escenario: "Reclamo por doble cobro",
+    const { email } = (await db.query("SELECT email FROM usuarios WHERE id = $1", [uEstA])).rows[0];
+    assert.deepEqual(c.informesRecientes, [{ id, usuarioId: uEstA, candidato: "Lucía Paz", email, escenario: "Reclamo por doble cobro",
       empresa: "MKT Contact Center", fecha: INFORME_PRUEBA.fecha, puntaje: 78, duracionSeg: INFORME_PRUEBA.duracionSeg }]);
   });
 

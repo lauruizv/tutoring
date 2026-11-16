@@ -3,10 +3,13 @@
 // Los exportadores (lib/exportar/) reciben estas filas y no saben de dónde vienen los datos.
 "use strict";
 
-// tipo: "texto" | "fecha" (Date) | "numero" | "duracion" (segundos). Cada exportador decide cómo mostrar cada tipo.
+// tipo: "texto" | "mail" | "codigo" (un identificador: no se parte en dos líneas) | "fecha" (Date) | "numero" | "duracion" (segundos).
+// Cada exportador decide cómo mostrar cada tipo.
 const COLUMNAS = [
   { clave: "simulacion", titulo: "Simulación", tipo: "texto" },
   { clave: "candidato", titulo: "Candidato", tipo: "texto" },
+  { clave: "email", titulo: "Mail", tipo: "mail" },
+  { clave: "usuarioId", titulo: "IdUsuario", tipo: "codigo" },
   { clave: "fecha", titulo: "Fecha", tipo: "fecha" },
   { clave: "puntaje", titulo: "Nota (0 a 100)", tipo: "numero" },
   { clave: "duracionSeg", titulo: "Duración", tipo: "duracion" }
@@ -22,6 +25,8 @@ function aFilaExport(resumen) {
   return {
     simulacion: texto(resumen.escenario),
     candidato: texto(resumen.candidato),
+    email: texto(resumen.email),
+    usuarioId: texto(resumen.usuarioId),
     fecha: Number.isNaN(instante) ? null : new Date(instante),
     puntaje: numero(resumen.puntaje),
     duracionSeg: numero(resumen.duracionSeg)

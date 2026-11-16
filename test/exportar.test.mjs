@@ -14,7 +14,7 @@ const { exportarInformes, FORMATOS, MAX_FILAS } = require("../backend/src/module
 const { normalizarFiltro } = require("../backend/src/modules/simulaciones/informes/filtro.js");
 
 const BSAS = "America/Argentina/Buenos_Aires";   // UTC-3 todo el año
-const resumen = extra => ({ id: "x", candidato: "Lucía Pérez", escenario: "Llamada de cobranza", empresa: "MKT Contact Center", fecha: "2026-11-10T15:05:00.000Z", puntaje: 84, duracionSeg: 245, ...extra });
+const resumen = extra => ({ id: "x", candidato: "Lucía Pérez", escenario: "Llamada de cobranza", empresa: "MKT Contact Center", fecha: "2026-11-10T15:05:00.000Z", puntaje: 84, duracionSeg: 245, usuarioId: "7b1e2c7e-4c1d-4f0a-9a55-0d2f6f0c9a11", email: "lucia@ejemplo.test", ...extra });
 const meta = extra => ({ empresa: "MKT Contact Center", generado: new Date("2026-11-11T13:30:00.000Z"), zona: BSAS, filtros: [], ...extra });
 const filtro = obj => normalizarFiltro(new URLSearchParams(obj));
 // Cuenta las páginas de un PDF: pdfkit escribe un objeto "/Type /Page" por cada una.
@@ -29,17 +29,17 @@ async function leerExcel(buffer) {
 }
 
 describe("fila de exportación (DTO)", () => {
-  test("las columnas son las cinco pedidas, en orden", () => {
-    assert.deepEqual(COLUMNAS.map(c => c.titulo), ["Simulación", "Candidato", "Fecha", "Nota (0 a 100)", "Duración"]);
+  test("las columnas son las pedidas, en orden", () => {
+    assert.deepEqual(COLUMNAS.map(c => c.titulo), ["Simulación", "Candidato", "Mail", "IdUsuario", "Fecha", "Nota (0 a 100)", "Duración"]);
   });
 
   test("pasa el resumen de un informe a una fila", () => {
-    assert.deepEqual(aFilaExport(resumen()), { simulacion: "Llamada de cobranza", candidato: "Lucía Pérez", fecha: new Date("2026-11-10T15:05:00.000Z"), puntaje: 84, duracionSeg: 245 });
+    assert.deepEqual(aFilaExport(resumen()), { simulacion: "Llamada de cobranza", candidato: "Lucía Pérez", email: "lucia@ejemplo.test", usuarioId: "7b1e2c7e-4c1d-4f0a-9a55-0d2f6f0c9a11", fecha: new Date("2026-11-10T15:05:00.000Z"), puntaje: 84, duracionSeg: 245 });
   });
 
   test("lo que falta o no se entiende queda vacío: nunca se inventa un valor", () => {
-    const fila = aFilaExport(resumen({ candidato: undefined, escenario: null, fecha: "sin fecha", puntaje: null, duracionSeg: "mucho" }));
-    assert.deepEqual(fila, { simulacion: "", candidato: "", fecha: null, puntaje: null, duracionSeg: null });
+    const fila = aFilaExport(resumen({ candidato: undefined, escenario: null, fecha: "sin fecha", puntaje: null, duracionSeg: "mucho", usuarioId: null, email: undefined }));
+    assert.deepEqual(fila, { simulacion: "", candidato: "", email: "", usuarioId: "", fecha: null, puntaje: null, duracionSeg: null });
     assert.equal(aFilaExport(resumen({ puntaje: 0, duracionSeg: 0 })).puntaje, 0, "un cero es un dato, no un faltante");
   });
 
@@ -93,28 +93,30 @@ describe("Excel", () => {
 
   test("la hoja Informes tiene el encabezado y una fila por informe, con datos y no textos", async () => {
     const hoja = (await leerExcel(await excel.generar(filas, meta()))).getWorksheet("Informes");
-    assert.deepEqual(hoja.getRow(1).values.slice(1), ["Simulación", "Candidato", "Fecha", "Nota (0 a 100)", "Duración"]);
+    assert.deepEqual(hoja.getRow(1).values.slice(1), ["Simulación", "Candidato", "Mail", "IdUsuario", "Fecha", "Nota (0 a 100)", "Duración"]);
     assert.equal(hoja.rowCount, 4);
 
-    const [simulacion, candidato, fecha, nota] = hoja.getRow(2).values.slice(1);
+    const [simulacion, candidato, mail, idUsuario, fecha, nota] = hoja.getRow(2).values.slice(1);
+    assert.deepEqual([mail, idUsuario], ["lucia@ejemplo.test", "7b1e2c7e-4c1d-4f0a-9a55-0d2f6f0c9a11"]);
+    assert.equal(hoja.getCell("D2").type, ExcelJS.ValueType.String, "el id es un texto");
     assert.equal(simulacion, "Llamada de cobranza");
     assert.equal(candidato, "Lucía Pérez");
     assert.equal(nota, 84);
-    assert.equal(hoja.getCell("D2").type, ExcelJS.ValueType.Number);
+    assert.equal(hoja.getCell("F2").type, ExcelJS.ValueType.Number);
     // La fecha es una fecha de Excel con la hora de reloj de Buenos Aires: 15:05 UTC son las 12:05.
-    assert.equal(hoja.getCell("C2").type, ExcelJS.ValueType.Date);
+    assert.equal(hoja.getCell("E2").type, ExcelJS.ValueType.Date);
     assert.equal(fecha.toISOString(), "2026-11-10T12:05:00.000Z");
-    assert.equal(hoja.getCell("C2").numFmt, "dd/mm/yyyy hh:mm");
+    assert.equal(hoja.getCell("E2").numFmt, "dd/mm/yyyy hh:mm");
     // La duración es un tiempo que Excel muestra como minutos:segundos (4:05), no un texto.
-    assert.equal(hoja.getCell("E2").numFmt, "[m]:ss");
-    assert.equal(segundosDe(hoja.getCell("E2")), 245);
-    assert.equal(segundosDe(hoja.getCell("E4")), 4510, "más de una hora");
+    assert.equal(hoja.getCell("G2").numFmt, "[m]:ss");
+    assert.equal(segundosDe(hoja.getCell("G2")), 245);
+    assert.equal(segundosDe(hoja.getCell("G4")), 4510, "más de una hora");
   });
 
   test("lo que falta queda en blanco y el cero se escribe", async () => {
     const hoja = (await leerExcel(await excel.generar(filas, meta()))).getWorksheet("Informes");
-    for (const celda of ["C3", "D3", "E3"]) assert.equal(hoja.getCell(celda).value, null, celda);
-    assert.equal(hoja.getCell("D4").value, 0);
+    for (const celda of ["E3", "F3", "G3"]) assert.equal(hoja.getCell(celda).value, null, celda);
+    assert.equal(hoja.getCell("F4").value, 0);
   });
 
   test("un nombre que empieza con = o + queda como texto, no como fórmula", async () => {
@@ -152,7 +154,7 @@ describe("Excel", () => {
 });
 
 describe("PDF", () => {
-  const filas = [aFilaExport(resumen()), aFilaExport(resumen({ candidato: "", puntaje: null, duracionSeg: null, fecha: "sin fecha" }))];
+  const filas = [aFilaExport(resumen()), aFilaExport(resumen({ candidato: "", puntaje: null, duracionSeg: null, fecha: "sin fecha", usuarioId: null, email: "" }))];
   const tabla = def => def.content.find(x => x.table).table;
   const textos = def => def.content.map(x => x.text).filter(Boolean);
 
@@ -164,12 +166,20 @@ describe("PDF", () => {
   test("la definición lleva el encabezado repetido en cada página y una fila por informe", () => {
     const t = tabla(pdf.definicionPdf(filas, meta()));
     assert.equal(t.headerRows, 1);
-    assert.equal(t.widths.length, 5);
-    assert.deepEqual(t.body[1].map(c => c.noWrap), [false, false, true, true, true], "fecha, nota y duración no se parten en dos líneas");
-    assert.deepEqual(t.body[0].map(c => c.text), ["Simulación", "Candidato", "Fecha", "Nota (0 a 100)", "Duración"]);
-    assert.deepEqual(t.body[1].map(c => c.text), ["Llamada de cobranza", "Lucía Pérez", "10/11/2026 12:05", "84", "4:05"], "la fecha, en la hora de Buenos Aires");
-    assert.deepEqual(t.body[2].map(c => c.text), ["Llamada de cobranza", "—", "—", "—", "—"], "lo que falta se marca con una raya");
+    assert.equal(t.widths.length, 7);
+    assert.equal(pdf.definicionPdf(filas, meta()).pageOrientation, "landscape", "con siete columnas va apaisado");
+    assert.deepEqual(t.body[1].map(c => c.noWrap), [false, false, false, true, true, true, true], "el id, la fecha, la nota y la duración no se parten en dos líneas");
+    assert.ok(t.widths.slice(2).every(a => typeof a === "number"), "solo simulación y candidato se reparten el ancho que sobra");
+    assert.deepEqual(t.body[0].map(c => c.text), ["Simulación", "Candidato", "Mail", "IdUsuario", "Fecha", "Nota (0 a 100)", "Duración"]);
+    assert.deepEqual(t.body[1].map(c => c.text), ["Llamada de cobranza", "Lucía Pérez", "lucia@ejemplo.test", "7b1e2c7e-4c1d-4f0a-9a55-0d2f6f0c9a11", "10/11/2026 12:05", "84", "4:05"], "la fecha, en la hora de Buenos Aires");
+    assert.deepEqual(t.body[2].map(c => c.text), ["Llamada de cobranza", "—", "—", "—", "—", "—", "—"], "lo que falta se marca con una raya");
     assert.equal(t.body.length, 3);
+  });
+
+  test("un mail largo va en dos líneas, cortado antes de la arroba: si no, ensancha la tabla y se sale de la hoja", () => {
+    const mailDe = email => tabla(pdf.definicionPdf([aFilaExport(resumen({ email }))], meta())).body[1][2].text;
+    assert.equal(mailDe("ana@empresa.com"), "ana@empresa.com");
+    assert.equal(mailDe("maria.fernanda.gonzalez.echeverria@mktcontactcenter.com.ar"), "maria.fernanda.gonzalez.echeverria\n@mktcontactcenter.com.ar");
   });
 
   test("arriba dice la empresa, cuántos informes son, cuándo se generó y los filtros", () => {
