@@ -108,6 +108,12 @@ Hoy hay 5 casos sintéticos, todos del escenario `incidente-viernes` de Nodo, co
 
 Registro paso a paso de los cambios del programa: qué se decidió, por qué y dónde está el detalle. Se actualiza en cada paso, con el más nuevo arriba. Cuando algo se implementa, se describe también en la sección de arquitectura que corresponda.
 
+### 2026-11-16 · Documento de investigación: precisión, golden evals y datos a registrar
+
+- **Qué es:** `docs/investigacion-simulaciones.md`, para el equipo técnico. Junta lo que se probó para hacer más precisas las simulaciones (con los números de las corridas), cómo se arma el golden set con RR. HH. y qué datos se registran, cuáles quedan propuestos y qué le falta al esquema de Postgres.
+- **No cambia código.** Los números salen de la bitácora y de `evals/resultados/`; no se corrió ninguna evaluación nueva.
+- **Para discutir:** el criterio de aceptación del golden set (sección 2.5) es una propuesta, no algo medido.
+
 ### 2026-11-16 · Datos de la llamada en el informe (rama local `local/integracion-perfil-empresa`)
 
 - **Para qué:** el pedido era evaluar qué otra información conviene registrar (flujo de la conversación, métricas secundarias). El informe decía qué se dijo y cómo se evaluó, pero no cómo fue la llamada.
