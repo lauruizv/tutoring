@@ -406,12 +406,12 @@
   // ESTUDIANTE: antes de la llamada
   // ------------------------------------------------------------------
   // Lista de "Lo que tenés a mano". En la llamada (copiar: true), cada dato tiene su botón para copiarlo.
-  function fichaLista(items, { copiar = false } = {}) {
+  function fichaLista(items, { copiar = false, alCopiar = null } = {}) {
     return h("ul", { class: copiar ? "tips ficha-lista" : "tips" }, ...items.map(it => {
       const dato = [it.titulo ? h("b", { text: it.titulo + ": " }) : null, it.texto];
       if (!copiar) return h("li", null, ...dato);
       return h("li", null, h("span", null, ...dato),
-        h("button", { class: "copiar", type: "button", title: "Copiar", "aria-label": `Copiar: ${it.titulo || it.texto.slice(0, 40)}`, onclick: () => copiarTexto(it.texto) }, icon("copy")));
+        h("button", { class: "copiar", type: "button", title: "Copiar", "aria-label": `Copiar: ${it.titulo || it.texto.slice(0, 40)}`, onclick: () => { if (alCopiar) alCopiar(); copiarTexto(it.texto); } }, icon("copy")));
     }));
   }
   async function copiarTexto(texto) {
@@ -631,6 +631,8 @@
     const grabadora = grabacion && grabacion.aceptado ? T.audio.crearGrabadora() : null;
     // En qué segundo de la grabación empieza y termina cada turno (sin grabación, los turnos no llevan tiempos).
     const cronometro = T.core.cronometroDeTurnos();
+    // Lo que pasa en la llamada además de lo que se dice; al terminar se resume con core.metricasDeLlamada.
+    const uso = { interrupciones: 0, fichaDisponible: false, fichaAbiertaAlEmpezar: false, fichaAperturas: 0, fichaCopias: 0, turnosEscritos: 0, micSilenciado: 0, avisos: 0, grabada: Boolean(grabadora) };
     const segundoDeGrabacion = () => (grabadora ? grabadora.ahora() : null);
     const grabando = h("span", { class: "grabando", role: "status", hidden: true, text: "Grabando" });
     const empezarAGrabar = () => { if (grabadora) { grabadora.empezar(); grabando.hidden = !grabadora.grabando; } };
@@ -652,8 +654,8 @@
     const fichaPanel = ficha.length ? h("aside", { class: "ficha-panel", id: "fichaPanel", hidden: true, "aria-label": "Lo que tenés a mano" },
       h("div", { class: "ficha-head" }, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }),
         h("button", { class: "cerrar", type: "button", title: "Cerrar", "aria-label": "Cerrar lo que tenés a mano", onclick: () => mostrarFicha(false) }, icon("x"))),
-      fichaLista(ficha, { copiar: true })) : null;
-    const fichaBtn = fichaPanel ? h("button", { class: "round", "aria-label": "Lo que tenés a mano", "aria-expanded": "false", "aria-controls": "fichaPanel", title: "Lo que tenés a mano", onclick: () => mostrarFicha(fichaPanel.hidden) }, icon("reports")) : null;
+      fichaLista(ficha, { copiar: true, alCopiar: () => { uso.fichaCopias++; } })) : null;
+    const fichaBtn = fichaPanel ? h("button", { class: "round", "aria-label": "Lo que tenés a mano", "aria-expanded": "false", "aria-controls": "fichaPanel", title: "Lo que tenés a mano", onclick: () => { if (fichaPanel.hidden) uso.fichaAperturas++; mostrarFicha(fichaPanel.hidden); } }, icon("reports")) : null;
     // Llamada por teléfono con un cliente: suena el timbre y el candidato atiende con un botón (entrante),
     // o escucha el tono de llamada hasta que el cliente atiende (saliente, "llama").
     const porTelefono = !enPersona(e) && !T.prompts.esLider(e);
@@ -666,7 +668,7 @@
       ? h("button", { class: "atender", id: "llamar" }, icon("phone"), "Llamar")
       : h("button", { class: "atender", id: "atender", disabled: conectaMientrasSuena }, icon("phone"), "Atender");
     const typeInput = h("input", { type: "text", placeholder: "Escribí tu respuesta y apretá Enter", "aria-label": "Tu respuesta" });
-    const typebar = h("form", { class: "typebar", hidden: true, onsubmit: ev => { ev.preventDefault(); S.engine && S.engine.sendText(typeInput.value); typeInput.value = ""; } },
+    const typebar = h("form", { class: "typebar", hidden: true, onsubmit: ev => { ev.preventDefault(); if (S.engine && typeInput.value.trim()) uso.turnosEscritos++; S.engine && S.engine.sendText(typeInput.value); typeInput.value = ""; } },
       typeInput, h("button", { class: "btn", type: "submit", text: "Enviar" }));
 
     // Mientras suena, la pantalla muestra solo el timbre y el botón verde, al centro (.call.sonando).
@@ -689,7 +691,8 @@
       if (!abrir && fichaPanel.contains(document.activeElement)) fichaBtn.focus();
     }
     if (fichaPanel) {
-      if (store.get(k("fichaAbierta"), false)) mostrarFicha(true);
+      uso.fichaDisponible = true;
+      if (store.get(k("fichaAbierta"), false)) { uso.fichaAbiertaAlEmpezar = true; mostrarFicha(true); }
       const alEsc = ev => { if (ev.key === "Escape" && !fichaPanel.hidden) mostrarFicha(false); };
       document.addEventListener("keydown", alEsc);
       S.alSalirDeVista = () => document.removeEventListener("keydown", alEsc);
@@ -744,6 +747,7 @@
           break;
         case "level": orb.style.setProperty("--lvl", Number(ev.value || 0).toFixed(3)); break;
         case "interim": capU.textContent = ev.text; break;
+        case "interrupt": uso.interrupciones++; break;
         case "partial": if (ev.text) { cap.classList.remove("pensando"); cap.textContent = ev.text; } break;
         case "turn":
           addTx(ev.role, ev.text);
@@ -754,6 +758,7 @@
           if (sonando && !ev.fatal && ev.code !== "mic") break;   // el aviso de "no se escucha nada" no aplica mientras suena
           if (ev.fatal) { pararTimbre(); yaAtendio(); }
           if (!ev.message) { note.hidden = true; break; }
+          uso.avisos++;
           note.hidden = false; note.textContent = ev.message;
           // El motor de voz no pudo arrancar: ofrecemos seguir con el siguiente para no frenar la demo.
           if (ev.code === "voz_inicio" || ev.code === "vapi_inicio") {
@@ -771,15 +776,16 @@
             abrirTeclado(true);
           }
           break;
-        case "end": finishCall(e, turns, Math.round((Date.now() - started) / 1000), ev.reason, { grabacion, grabadora }); break;
+        case "end": finishCall(e, turns, Math.round((Date.now() - started) / 1000), ev.reason, { grabacion, grabadora }, { motor: provider, uso }); break;
       }
     }
 
-    const interrumpir = () => { if (engine.state === "speaking" || engine.state === "thinking") engine.interrupt(); };
+    const interrumpir = () => { if (engine.state === "speaking" || engine.state === "thinking") { if (engine.state === "speaking") uso.interrupciones++; engine.interrupt(); } };
     orb.addEventListener("click", interrumpir);
     orb.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); interrumpir(); } });
     micBtn.addEventListener("click", () => {
       muted = !muted; engine.setMuted(muted);
+      if (muted) uso.micSilenciado++;
       micBtn.replaceChildren(icon(muted ? "micOff" : "mic")); micBtn.classList.toggle("on", muted);
       micBtn.setAttribute("aria-pressed", String(muted));
       micBtn.setAttribute("aria-label", muted ? "Activar micrófono" : "Silenciar micrófono");
@@ -890,13 +896,15 @@
 
   // audio: { grabacion, grabadora } de la llamada. La aceptación (o el no) viaja con la llamada para quedar en el
   // informe; la grabación es una promesa, porque la grabadora tarda un instante en entregar el archivo.
-  function finishCall(e, turns, seconds, reason, audio) {
+  // registro: { motor, uso } de la llamada, para los datos de la llamada del informe.
+  function finishCall(e, turns, seconds, reason, audio, registro) {
     pararTimbre(); pararLinea();
     clearInterval(S.timer);
     S.engine = null;
     const userTurns = turns.filter(t => t.role === "user").length;
     const { grabacion = null, grabadora = null } = audio || {};
     S.lastCall = { escenario: e, turns: turns.slice(), seconds, reason, simulacion: S.simulacion, grabacion, audio: grabadora ? grabadora.terminar() : null };
+    if (registro) S.lastCall.metricas = T.core.metricasDeLlamada({ turnos: turns, motivo: reason, motor: registro.motor, uso: registro.uso });
     if (userTurns < 2) { S.lastCall.audio = null; return go("corta", { id: e.id }); }   // sin informe no se guarda ninguna grabación
     go("evaluating");
   }
@@ -951,6 +959,8 @@
         };
         // Si se le ofreció grabar, queda en el informe lo que leyó y lo que respondió (sí o no).
         if (call.grabacion) report.consentimientoAudio = call.grabacion;
+        // Datos de la llamada (turnos, palabras, ayudas usadas): los ve la empresa en el informe. No cambian el puntaje.
+        if (call.metricas) report.metricas = call.metricas;
         call.pendingReport = report;
       }
       try {
@@ -1130,6 +1140,12 @@
       h("div", { class: "box" }, h("h3", { text: "Cómo se expresó" }), h("p", { text: ev.expresion || "—" }))));
     if (ev.preguntas_entrevista && ev.preguntas_entrevista.length)
       col.append(h("div", { class: "box" }, h("h3", { text: "Preguntas sugeridas para la entrevista" }), ul(ev.preguntas_entrevista)));
+
+    // Datos de la llamada: solo para la empresa. Los informes anteriores no los tienen.
+    const datosDeLaLlamada = S.usuario && S.usuario.rol === "empresa" ? T.core.describirMetricas(r.metricas, NOMBRE_MOTOR) : [];
+    if (datosDeLaLlamada.length)
+      col.append(h("div", { class: "box", id: "datosLlamada" }, h("h3", { text: "Datos de la llamada" }), ul(datosDeLaLlamada),
+        h("p", { class: "nota-datos", text: "Los calcula la app con lo que pasó en la llamada. No forman parte del puntaje." })));
 
     const tx = h("div", { class: "transcript" });
     (r.transcripcion || []).forEach(t => tx.append(h("div", { class: "ln " + (t.role === "user" ? "u" : "c") }, h("b", { text: t.role === "user" ? firstName(r.candidato) : clientName(r.escenario) }), t.text)));

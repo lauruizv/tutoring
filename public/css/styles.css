@@ -239,6 +239,7 @@ h1,h2,h3{margin:0;text-wrap:balance;letter-spacing:-.01em}
 .box{border:1px solid var(--line);border-radius:14px;padding:14px 16px}
 .box h3{font-size:14px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
 .box h3 i{width:8px;height:8px;border-radius:50%}
+.nota-datos{color:var(--muted);font-size:12px;margin-top:8px}
 .box ul,.box ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px}
 .box p{margin:0}
 .disclaimer{font-size:12.8px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}

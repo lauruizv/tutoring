@@ -21,6 +21,7 @@
      {type:"partial", text}               lo que va diciendo el cliente (parcial)
      {type:"turn", role, text}            un turno terminado
      {type:"level", value}                volumen del micrófono 0..1
+     {type:"interrupt"}                   el candidato habló encima del cliente y lo cortó (solo Gemini Live)
      {type:"end", reason:"fin"|"user"}    la llamada terminó
      {type:"error", message, fatal, code} code: "mic" cuando el problema es el micrófono,
                                           "voz_inicio" / "vapi_inicio" cuando el motor no pudo conectar
@@ -935,6 +936,7 @@ registerProcessor("mic-pcm", MicPcm);`;
       }
       if (sc.interrupted) {
         // El estudiante habló encima: el cliente se calla al instante.
+        if (generando || state === "speaking") emit({ type: "interrupt" });
         cortarAudio();
         generando = false; descartar = false;
         if (textoCliente) cerrarCliente();

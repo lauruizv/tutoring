@@ -500,3 +500,78 @@ describe("tiemposDePalabras", () => {
     assert.deepEqual(core.tiemposDePalabras(voz(2), PASO, 0, "  "), []);
   });
 });
+
+describe("datos de la llamada (métricas)", () => {
+  const turnos = [
+    { role: "assistant", text: "Hola, tengo un problema con la factura.", t0: 0, t1: 3 },
+    { role: "user", text: "Buen día, ¿me decís tu DNI?", t0: 3, t1: 7.5 },
+    { role: "assistant", text: "Sí, treinta millones.", t0: 8, t1: 10 },
+    { role: "user", text: "Gracias. Ya lo veo: tenés un cobro duplicado y te lo devolvemos en diez días.", t0: 10, t1: 18 },
+    { role: "user", text: "anotá el número" }   // escrito con el teclado: sin tiempos
+  ];
+  const uso = { interrupciones: 2, fichaDisponible: true, fichaAbiertaAlEmpezar: false, fichaAperturas: 3, fichaCopias: 1, turnosEscritos: 1, micSilenciado: 1, avisos: 0, grabada: true };
+
+  test("cuenta turnos, palabras y tiempos de cada lado", () => {
+    const m = core.metricasDeLlamada({ turnos, motivo: "user", motor: "gemini-live", uso });
+    assert.deepEqual(m.turnos, { candidato: 3, cliente: 2 });
+    assert.deepEqual(m.palabras, { candidato: 24, cliente: 10 });
+    assert.equal(m.parteDelCandidato, 71);
+    assert.equal(m.respuestaMasLarga, 15);
+    assert.deepEqual(m.tiempoDeTurnos, { candidatoSeg: 12.5, clienteSeg: 5 }, "el turno escrito no suma tiempo");
+    assert.equal(m.version, 1);
+  });
+
+  test("guarda lo que anotó la pantalla: interrupciones, ayudas, cómo terminó y con qué voz", () => {
+    const m = core.metricasDeLlamada({ turnos, motivo: "user", motor: "gemini-live", uso });
+    assert.equal(m.interrupciones, 2);
+    assert.equal(m.fin, "candidato");
+    assert.deepEqual(m.ayudas, { ficha: { abiertaAlEmpezar: false, aperturas: 3, copias: 1 }, turnosEscritos: 1, micSilenciado: 1 });
+    assert.deepEqual(m.tecnico, { motor: "gemini-live", grabada: true, avisos: 0 });
+    assert.equal(core.metricasDeLlamada({ turnos, motivo: "fin" }).fin, "conversacion");
+    assert.equal(core.metricasDeLlamada({ turnos, motivo: "otra cosa" }).fin, "desconocido");
+  });
+
+  test("sin grabación no hay tiempos y sin ficha en el escenario no hay datos de la ficha", () => {
+    const sinTiempos = turnos.map(({ role, text }) => ({ role, text }));
+    const m = core.metricasDeLlamada({ turnos: sinTiempos, motivo: "fin", motor: "browser", uso: { fichaAperturas: 5 } });
+    assert.equal(m.tiempoDeTurnos, null);
+    assert.equal(m.ayudas.ficha, null, "lo que mande de la ficha no cuenta si el escenario no tiene");
+    assert.equal(m.tecnico.grabada, false);
+  });
+
+  test("lo que falta o viene mal cuenta como cero: nunca se inventa un dato ni se rompe", () => {
+    for (const datos of [undefined, null, {}, { turnos: "no", uso: 7 }, { turnos: [null, { role: "otro", text: "x" }, 3] }]) {
+      const m = core.metricasDeLlamada(datos);
+      assert.deepEqual([m.turnos, m.palabras, m.parteDelCandidato, m.interrupciones, m.tiempoDeTurnos], [{ candidato: 0, cliente: 0 }, { candidato: 0, cliente: 0 }, null, 0, null]);
+    }
+    const raro = core.metricasDeLlamada({ turnos, uso: { interrupciones: -3, micSilenciado: "muchas", avisos: 2.6, turnosEscritos: 99 } });
+    assert.deepEqual([raro.interrupciones, raro.ayudas.micSilenciado, raro.tecnico.avisos], [0, 0, 3]);
+    assert.equal(raro.ayudas.turnosEscritos, 3, "no puede haber más respuestas escritas que respuestas");
+  });
+
+  test("las frases del informe dicen lo que pasó, con singular y plural", () => {
+    const frases = core.describirMetricas(core.metricasDeLlamada({ turnos, motivo: "user", motor: "gemini-live", uso }), { "gemini-live": "Gemini Live" });
+    assert.deepEqual(frases, [
+      "Turnos: 3 del candidato y 2 del cliente.",
+      "Palabras: 24 del candidato (71 % de lo que se dijo) y 10 del cliente. Su respuesta más larga tuvo 15 palabras.",
+      "Tiempo de los turnos: 0:13 del candidato (incluye la pausa antes de contestar) y 0:05 del cliente.",
+      "Interrumpió al cliente 2 veces.",
+      "La llamada la cortó el candidato.",
+      "“Lo que tenés a mano”: la abrió 3 veces, copió 1 dato.",
+      "Escribió con el teclado 1 de sus respuestas.",
+      "Silenció el micrófono 1 vez.",
+      "Voz: Gemini Live, con grabación."
+    ]);
+  });
+
+  test("las frases cubren los casos sin nada para contar y un informe viejo no muestra nada", () => {
+    const m = core.metricasDeLlamada({ turnos: [{ role: "user", text: "hola" }], motivo: "fin", motor: "browser", uso: { fichaDisponible: true, fichaAbiertaAlEmpezar: true, avisos: 1 } });
+    const frases = core.describirMetricas(m, {});
+    assert.ok(frases.includes("No interrumpió al cliente."));
+    assert.ok(frases.includes("La llamada terminó sola: el cliente se despidió o se cortó la conexión."));
+    assert.ok(frases.includes("“Lo que tenés a mano”: la tenía abierta al empezar."));
+    assert.ok(frases.includes("Voz: browser, sin grabación. Hubo 1 aviso de error durante la llamada."));
+    assert.ok(core.describirMetricas(core.metricasDeLlamada({ turnos, uso: { fichaDisponible: true } })).includes("“Lo que tenés a mano”: no la abrió."));
+    for (const viejo of [undefined, null, {}, "x"]) assert.deepEqual(core.describirMetricas(viejo), []);
+  });
+});

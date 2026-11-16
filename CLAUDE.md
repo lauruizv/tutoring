@@ -61,6 +61,8 @@ Otras reglas del servidor:
 
 **Frontend (`public/js/app.js`).** Es una SPA sin framework: `VIEWS[nombre]`, `go()` y el estado en `S`. Al arrancar, `boot()` → `entrar()` pide `/api/yo`; sin sesión muestra `VIEWS.login` (`body.sin-sesion` oculta la barra lateral). El perfil sale del rol de la sesión: ya no hay selector de perfil ni campo de nombre. Cada rol tiene su pantalla de inicio (`INICIO`) y su color (`body[data-rol]`). El `localStorage` se separa por usuario (`k()`). Un 401 `sin_ingreso` en cualquier pedido lleva al ingreso con aviso (`T.api.onSinSesion`). Hay tres perfiles: estudiante (se muestra como "Candidato": simulación por voz e informe), junior (chat con el mentor) y empresa (configura contexto, escenarios y criterios, y ve los informes). El informe se arma en el navegador (`runEvaluation`): prompt de `T.prompts.evaluacion`, `purpose: "eval"`, parseo y puntaje con `core`, y después `POST /api/informes`. El servidor lo guarda casi como llega: descarta `simulacionId` y `empresaId` si vienen del navegador y, para las cuentas de Postgres, los pone él (ver "Inicio de la empresa"). Candidato y empresa ven la misma vista (`VIEWS.report`). Las dos listas de informes ("Mis informes" e "Informes" de la empresa) usan `listaDeInformes` y `barraFiltros`: fechas, simulación y, solo para la empresa, candidato. El navegador convierte los días elegidos en instantes con `core.rangoDeDias` (en la hora de la persona, para que "hasta el 10" incluya todo el 10) y filtra el servidor. Lo elegido queda en `S.filtros` y la última lista, en `S.listaInformes`, así al volver de un informe se ve igual. `S.informes` es otra cosa: todos los informes del candidato, sin filtros, para "Tus simulaciones" del inicio. En la lista de la empresa, dos botones (Excel y PDF) bajan lo que está en pantalla: usan el filtro de la última búsqueda mostrada, no lo que se está tipeando (`exportable` en `listaDeInformes`).
 
+**Datos de la llamada (`metricas` en el informe).** Al terminar la llamada, `core.metricasDeLlamada` resume lo que pasó además de lo que se dijo: turnos y palabras de cada lado, qué parte de lo dicho fue del candidato, su respuesta más larga, el tiempo de los turnos (solo con grabación), cuántas veces interrumpió al cliente, quién cortó, el uso de "Lo que tenés a mano" (aperturas y datos copiados), respuestas escritas con el teclado, veces que silenció el micrófono, y el motor de voz con sus avisos de error. `VIEWS.call` anota esos hechos en `uso` mientras dura la llamada y `finishCall` arma las métricas; `runEvaluation` las guarda en el informe. Los motores avisan con el evento `interrupt` cuando el candidato le habla encima al cliente (solo Gemini Live); tocar la esfera mientras habla también cuenta. En `VIEWS.report`, `core.describirMetricas` las pasa a frases para el bloque "Datos de la llamada", que se muestra solo al rol empresa. Se calculan en el navegador, sin IA; no cambian el puntaje ni se le pasan al evaluador. `metricas.version` vale 1: si cambia el significado de un campo, se sube.
+
 **Quién arranca la llamada.** El campo `inicio` del escenario define quién habla primero: sin el campo, el cliente (como siempre); `"atiende"` (llamada entrante: `vozInicio` devuelve `null` y los tres motores esperan a que hable el candidato); `"llama"` (llamada saliente: el cliente atiende solo con "¿Hola?"). El prompt de voz y el de evaluación lo mencionan solo si el campo está, así los escenarios viejos no cambian.
 
 **Voz (`public/js/voice.js`).** Tres motores con la misma interfaz: `gemini-live` (por defecto, voz a voz por WebSocket directo a Google con un token efímero de `/api/voz/token`), `vapi` y `browser`. La transcripción que generan es la que después se evalúa.
@@ -105,6 +107,24 @@ Hoy hay 5 casos sintéticos, todos del escenario `incidente-viernes` de Nodo, co
 ## Bitácora
 
 Registro paso a paso de los cambios del programa: qué se decidió, por qué y dónde está el detalle. Se actualiza en cada paso, con el más nuevo arriba. Cuando algo se implementa, se describe también en la sección de arquitectura que corresponda.
+
+### 2026-11-16 · Datos de la llamada en el informe (rama local `local/integracion-perfil-empresa`)
+
+- **Para qué:** el pedido era evaluar qué otra información conviene registrar (flujo de la conversación, métricas secundarias). El informe decía qué se dijo y cómo se evaluó, pero no cómo fue la llamada.
+- **Qué hay:** cada informe nuevo guarda `metricas` y la empresa ve un bloque "Datos de la llamada" en el informe, antes de la conversación completa. El detalle de los campos está en "Datos de la llamada" de Arquitectura.
+- **Decisiones del usuario:** se implementan tres grupos (flujo de la conversación, uso de las ayudas y datos técnicos); el bloque lo ve solo la empresa; por ahora no van al Excel ni al PDF.
+- **Decisiones técnicas:**
+  - Se calculan en el navegador con lo que la app ya sabe: sin IA, sin costo y sin tocar el servidor ni el evaluador.
+  - No se guarda "palabras por minuto". El turno del candidato va desde que terminó el cliente hasta que terminó de hablar, así que incluye la pausa de antes de contestar: el número daría más lento de lo que la persona habla. Se guarda el tiempo de los turnos y el informe lo aclara.
+  - No se guarda cuántos intentos necesitó el evaluador: eso pasa en el servidor y el navegador no lo ve.
+  - Una interrupción se cuenta cuando el candidato le habla encima al cliente (evento nuevo `interrupt`, solo Gemini Live) o toca la esfera mientras el cliente habla.
+- **Límites:**
+  - Las calcula el navegador, igual que el informe: alguien con conocimientos técnicos las podría alterar. Se resuelve cuando la evaluación pase al servidor.
+  - "Solo la empresa" es lo que muestra la pantalla: el dato viaja dentro del informe, que el candidato también puede pedir. No es información sensible para él (es lo que hizo en su propia llamada).
+  - Con Vapi y con la voz del navegador no se detecta que el candidato hable encima: solo cuentan los toques en la esfera.
+  - Los informes anteriores no tienen `metricas` y no muestran el bloque.
+- **Queda como propuesta, sin implementar:** intentos por escenario y llamadas abandonadas (necesita guardar llamadas sin informe en el servidor), pasos del guion cumplidos (cambia el evaluador y hay que recalibrar) y demora en responder y silencios (solo se puede medir con la grabación).
+- **Estado:** con el Node de Windows y Postgres prendido, `npm test` pasa 361 de 362 (falla solo la de SIGTERM) y `npm run test:e2e`, 48 de 48. **Falta verlo con una llamada real de Gemini Live.**
 
 ### 2026-11-16 · Mail e IdUsuario en la exportación, búsqueda por mail y `escenario.id` en el informe (rama local `local/integracion-perfil-empresa`)
 

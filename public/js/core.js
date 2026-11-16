@@ -509,7 +509,81 @@
   }
   const esSoftware = cfg => /software|sistemas|tecnolog|desarrollo|programaci|inform[aá]tica|\bit\b|saas/i.test(str(cfg && cfg.rubro));
 
-  const api = { normalizarHistorial, extraerJSON, parseEvaluacion, puntajeCriterio, puntajePonderado, buscarCriterio, clave, textoHablable, largoDecible, rangoDeDias, cronometroDeTurnos, comoSeDice, ubicarCita, tramoDeCita, tiemposDePalabras, PASO_VOLUMEN_SEG,
+  // ------------------------------------------------------------------
+  // Datos de la llamada: lo que pasó además de lo que se dijo (cuánto habló cada uno, si interrumpió,
+  // qué ayudas usó). Se calculan al terminar la llamada con lo que la app ya sabe: sin IA y sin costo.
+  // No cambian el puntaje; son para que la empresa lea el informe con más contexto.
+  // ------------------------------------------------------------------
+  const cuantasPalabras = texto => (str(texto).trim().match(/\S+/g) || []).length;
+  const cuenta = v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+
+  // datos: { turnos, motivo, motor, uso }
+  //   turnos   los de la llamada: { role, text } y, si se grabó, t0 y t1 (segundos).
+  //   motivo   el del evento "end" del motor: "user" (cortó el candidato) o "fin" (terminó la conversación).
+  //   motor    "gemini-live" | "vapi" | "browser".
+  //   uso      lo que anotó la pantalla de la llamada: { interrupciones, fichaDisponible, fichaAbiertaAlEmpezar,
+  //            fichaAperturas, fichaCopias, turnosEscritos, micSilenciado, avisos, grabada }.
+  // Lo que no viene o no se entiende cuenta como cero: nunca se inventa un dato.
+  function metricasDeLlamada(datos) {
+    const d = datos && typeof datos === "object" ? datos : {};
+    const uso = d.uso && typeof d.uso === "object" ? d.uso : {};
+    const turnos = Array.isArray(d.turnos) ? d.turnos.filter(t => t && (t.role === "user" || t.role === "assistant")) : [];
+    const candidato = turnos.filter(t => t.role === "user"), cliente = turnos.filter(t => t.role === "assistant");
+    const palabras = lista => lista.reduce((n, t) => n + cuantasPalabras(t.text), 0);
+    const conTiempos = lista => lista.filter(t => Number.isFinite(t.t0) && Number.isFinite(t.t1) && t.t1 > t.t0);
+    const segundos = lista => decima(conTiempos(lista).reduce((n, t) => n + (t.t1 - t.t0), 0));
+    const delCandidato = palabras(candidato), delCliente = palabras(cliente);
+    const hayTiempos = conTiempos(turnos).length > 0;
+    return {
+      version: 1,
+      turnos: { candidato: candidato.length, cliente: cliente.length },
+      palabras: { candidato: delCandidato, cliente: delCliente },
+      // De todo lo que se dijo, qué parte dijo el candidato (0 a 100).
+      parteDelCandidato: delCandidato + delCliente ? Math.round(100 * delCandidato / (delCandidato + delCliente)) : null,
+      respuestaMasLarga: candidato.reduce((max, t) => Math.max(max, cuantasPalabras(t.text)), 0),
+      // Solo con grabación. El turno del candidato va desde que terminó el cliente hasta que terminó de hablar:
+      // incluye la pausa de antes de contestar, así que no es "tiempo hablando".
+      tiempoDeTurnos: hayTiempos ? { candidatoSeg: segundos(candidato), clienteSeg: segundos(cliente) } : null,
+      interrupciones: cuenta(uso.interrupciones),
+      fin: d.motivo === "user" ? "candidato" : d.motivo === "fin" ? "conversacion" : "desconocido",
+      ayudas: {
+        ficha: uso.fichaDisponible ? { abiertaAlEmpezar: Boolean(uso.fichaAbiertaAlEmpezar), aperturas: cuenta(uso.fichaAperturas), copias: cuenta(uso.fichaCopias) } : null,
+        turnosEscritos: Math.min(cuenta(uso.turnosEscritos), candidato.length),
+        micSilenciado: cuenta(uso.micSilenciado)
+      },
+      tecnico: { motor: str(d.motor), grabada: Boolean(uso.grabada), avisos: cuenta(uso.avisos) }
+    };
+  }
+
+  // Las métricas dichas en frases, para el bloque "Datos de la llamada" del informe.
+  // nombresDeMotor: { "gemini-live": "Gemini Live", ... } (los nombres los tiene la pantalla).
+  function describirMetricas(m, nombresDeMotor) {
+    if (!m || typeof m !== "object" || !m.turnos || !m.palabras) return [];
+    const veces = (n, una, varias) => (n === 1 ? una : varias.replace("#", n));
+    const minSeg = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+    const frases = [];
+    frases.push(`Turnos: ${m.turnos.candidato} del candidato y ${m.turnos.cliente} del cliente.`);
+    frases.push(`Palabras: ${m.palabras.candidato} del candidato` + (m.parteDelCandidato == null ? "" : ` (${m.parteDelCandidato} % de lo que se dijo)`) +
+      ` y ${m.palabras.cliente} del cliente.` + (m.respuestaMasLarga ? ` Su respuesta más larga tuvo ${veces(m.respuestaMasLarga, "1 palabra", "# palabras")}.` : ""));
+    if (m.tiempoDeTurnos) frases.push(`Tiempo de los turnos: ${minSeg(m.tiempoDeTurnos.candidatoSeg)} del candidato (incluye la pausa antes de contestar) y ${minSeg(m.tiempoDeTurnos.clienteSeg)} del cliente.`);
+    frases.push(m.interrupciones ? `Interrumpió al cliente ${veces(m.interrupciones, "1 vez", "# veces")}.` : "No interrumpió al cliente.");
+    if (m.fin === "candidato") frases.push("La llamada la cortó el candidato.");
+    if (m.fin === "conversacion") frases.push("La llamada terminó sola: el cliente se despidió o se cortó la conexión.");
+    const a = m.ayudas || {};
+    if (a.ficha) {
+      const abrio = a.ficha.aperturas ? `la abrió ${veces(a.ficha.aperturas, "1 vez", "# veces")}` : a.ficha.abiertaAlEmpezar ? "" : "no la abrió";
+      const partes = [a.ficha.abiertaAlEmpezar ? "la tenía abierta al empezar" : "", abrio, a.ficha.copias ? `copió ${veces(a.ficha.copias, "1 dato", "# datos")}` : ""].filter(Boolean);
+      frases.push(`“Lo que tenés a mano”: ${partes.join(", ")}.`);
+    }
+    if (a.turnosEscritos) frases.push(`Escribió con el teclado ${veces(a.turnosEscritos, "1 de sus respuestas", "# de sus respuestas")}.`);
+    if (a.micSilenciado) frases.push(`Silenció el micrófono ${veces(a.micSilenciado, "1 vez", "# veces")}.`);
+    const t = m.tecnico || {};
+    const motor = (nombresDeMotor && nombresDeMotor[t.motor]) || t.motor;
+    if (motor) frases.push(`Voz: ${motor}, ${t.grabada ? "con grabación" : "sin grabación"}.` + (t.avisos ? ` Hubo ${veces(t.avisos, "1 aviso de error", "# avisos de error")} durante la llamada.` : ""));
+    return frases;
+  }
+
+  const api = { metricasDeLlamada, describirMetricas, normalizarHistorial, extraerJSON, parseEvaluacion, puntajeCriterio, puntajePonderado, buscarCriterio, clave, textoHablable, largoDecible, rangoDeDias, cronometroDeTurnos, comoSeDice, ubicarCita, tramoDeCita, tiemposDePalabras, PASO_VOLUMEN_SEG,
     GENERALES, ACCIONES_JUNIOR, esFormatoViejo, migrarConfig, normalizarConfig, contextoDe, responsableTexto, esSoftware, nuevoId };
 
   if (typeof module === "object" && module.exports) module.exports = api;

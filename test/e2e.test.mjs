@@ -134,6 +134,7 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     const aviso = await page.locator(".disclaimer").textContent();
     assert.match(aviso, /no recomienda contratar ni descartar/);
     assert.equal(await page.locator(".report .notice").count(), 0, "no debería avisar criterios sin puntuar");
+    assert.equal(await page.locator("#datosLlamada").count(), 0, "los datos de la llamada son para la empresa, no para el candidato");
   });
 
   test("el informe quedó guardado en el servidor y se ve en la lista", async () => {
@@ -141,6 +142,11 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     assert.equal(cuerpo.length, 1);
     assert.equal(cuerpo[0].candidato, "Lucas Ferreyra");
     assert.equal(cuerpo[0].puntaje, 81);
+    // Con el informe se guardan los datos de la llamada: dos respuestas, las dos escritas, y cortó el candidato.
+    const { metricas } = (await pedir(app.base, `/api/informes/${cuerpo[0].id}`)).cuerpo;
+    assert.deepEqual([metricas.version, metricas.turnos.candidato, metricas.ayudas.turnosEscritos, metricas.fin, metricas.ayudas.ficha, metricas.tecnico.motor, metricas.tecnico.grabada],
+      [1, 2, 2, "candidato", null, "browser", false]);
+    assert.ok(metricas.turnos.cliente >= 2 && metricas.palabras.candidato === 26, JSON.stringify(metricas));
 
     await page.locator('.nav button:has-text("Mis informes")').click();
     await esperarVista("Mis informes");
@@ -222,6 +228,11 @@ describe("recorrido completo en el navegador", { skip: saltear }, () => {
     await page.locator(".list button").first().click();
     await esperarVista("Informe");
     assert.equal(await page.locator('button:has-text("Eliminar")').count(), 1);
+    const datos = await page.locator("#datosLlamada li").allTextContents();
+    assert.ok(datos.includes("Escribió con el teclado 2 de sus respuestas."), datos.join(" | "));
+    assert.ok(datos.includes("La llamada la cortó el candidato."), datos.join(" | "));
+    // Sin micrófono, el motor avisa: por eso la frase de la voz puede seguir con el aviso de error.
+    assert.ok(datos.some(d => d.startsWith("Voz: Voz del navegador, sin grabación.")), datos.join(" | "));
 
     await page.locator('button:has-text("Eliminar")').click();
     await esperarVista("Informes de candidatos");

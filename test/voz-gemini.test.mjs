@@ -396,6 +396,10 @@ describe("voz con Gemini Live (conexión simulada)", { skip: saltear }, () => {
       assert.ok(enviado.includes(frase), "falta en la evaluación: " + frase);
     }
     assert.ok(!/no debería sonar/.test(enviado), "lo descartado no entra en la transcripción");
+    // Datos de la llamada: lo interrumpió dos veces (una hablándole encima y otra tocando la esfera) y cortó el cliente.
+    const lista = (await pedir(app.base, "/api/informes")).cuerpo;
+    const { metricas } = (await pedir(app.base, `/api/informes/${lista[0].id}`)).cuerpo;
+    assert.deepEqual([metricas.interrupciones, metricas.fin, metricas.tecnico.motor, metricas.ayudas.turnosEscritos], [2, "conversacion", "gemini-live", 0]);
     assert.ok(await page.evaluate(() => window.__live.abiertos.every(w => w.readyState === 3)), "se cerró la conexión");
     assert.deepEqual(errores, []);
     await page.context().close();
