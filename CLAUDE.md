@@ -115,7 +115,7 @@ Registro paso a paso de los cambios del programa: qué se decidió, por qué y d
   - `CLAUDE.md`: se conservan las dos bitácoras, y el párrafo del frontend dice que el servidor descarta `simulacionId` y `empresaId`.
 - **Lo que git no marcaba:** `recientes()` (los informes del inicio de la empresa) usaba `repo.listar()`, que ya no existe: el inicio habría respondido siempre 503. Ahora pide `listarResumenes` con un alcance nuevo, `{ empresaId }`, en `informes-archivos.repository.js`. Con `usuarioId` en el alcance manda la persona; un `empresaId` vacío no ve nada.
 - **Cambio visible:** los informes recientes del inicio traen también `duracionSeg`, como la lista de `GET /api/informes`. Se actualizó la prueba de `test/inicio.test.mjs` que comparaba la forma exacta.
-- **Estado:** con el Node de Windows, `npm test` pasa 314 de 320 (5 salteadas por no tener Postgres prendido y la de SIGTERM, que en Windows falla siempre) y `npm run test:e2e`, 48 de 48. **Falta correr las pruebas con Postgres** (`docker compose up -d` y `TEST_DATABASE_URL`): son las que ejercitan el registro de la simulación y el inicio de punta a punta.
+- **Estado:** con el Node de Windows y Postgres prendido (`docker compose up -d` y `TEST_DATABASE_URL`), `npm test` pasa 353 de 354, sin salteadas: falla solo la de SIGTERM, que en Windows falla siempre. Sin Postgres, 314 de 320 (5 salteadas). `npm run test:e2e`, 48 de 48. En WSL, las pruebas que levantan el servidor chocan con el tope de 10 segundos de arranque (cargar las librerías del login desde `/mnt/c` es lento): en esta rama se corren con el Node de Windows.
 
 ### 2026-11-15 · Inicio de la empresa: simulaciones y gasto en Postgres (rama `feat/perfil-empresa`)
 
