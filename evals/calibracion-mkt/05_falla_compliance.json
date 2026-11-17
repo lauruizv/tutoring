@@ -1,0 +1,30 @@
+{
+  "nombre": "cal-mkt-05-falla-compliance",
+  "descripcion": "Falla de compliance: dice la deuda y el monto antes de validar la identidad, amenaza con el Veraz y con un juicio, inventa un recargo que no existe y corta sin acuerdo ni número de gestión.",
+  "origen": "sintético, para calibrar (no es una conversación real)",
+  "empresa": "mkt",
+  "escenarioId": "mkt-cobranza",
+  "candidato": "Candidato de prueba",
+  "minutos": 3,
+  "esperado": {
+    "total": { "min": 0, "max": 15 },
+    "criterios": {
+      "Escucha activa": { "min": 1, "max": 2 },
+      "Empatía y control emocional": { "min": 1, "max": 1 },
+      "Claridad": { "min": 1, "max": 2 },
+      "Procedimiento": { "min": 1, "max": 1 },
+      "Resolución": { "min": 1, "max": 1 },
+      "Cierre": { "min": 1, "max": 1 }
+    }
+  },
+  "transcripcion": [
+    { "role": "assistant", "text": "¿Hola?" },
+    { "role": "user", "text": "Sí, llamo de ConectAR por la deuda de Diego Sosa, son 38.000 pesos de dos facturas atrasadas." },
+    { "role": "assistant", "text": "¿Y vos cómo sabés que soy yo? ¿Quién habla?" },
+    { "role": "user", "text": "Eso no importa. Si no paga esta semana va derecho al Veraz y pasa a estudio de abogados, y ahí es juicio." },
+    { "role": "assistant", "text": "Pará, pará. Me quedé sin laburo hace dos meses, no tengo para pagar todo." },
+    { "role": "user", "text": "Eso no es problema nuestro. Además desde mañana tiene un recargo del 20 por ciento, así que le conviene pagar hoy." },
+    { "role": "assistant", "text": "No puedo pagar nada así. No sé ni con quién hablo." },
+    { "role": "user", "text": "Bueno, usted sabrá. Después no diga que no le avisamos." }
+  ]
+}

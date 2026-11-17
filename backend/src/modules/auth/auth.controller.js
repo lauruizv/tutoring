@@ -1,0 +1,38 @@
+const { json, fail } = require("../../shared/http/respuesta");
+const { bodyObject } = require("../../shared/http/body");
+const { cookieDe } = require("../../shared/http/cookies");
+const { ipDe, esHttps } = require("../../shared/http/proxy");
+const { auth } = require("./sesion");
+
+const COOKIE_BASE = "HttpOnly; SameSite=Lax; Path=/";
+
+async function ingresar(req, res) {
+  const body = await bodyObject(req, res, 4096, "");
+  if (!body) return;
+  const r = auth.ingresar(body.usuario, body.clave, ipDe(req));
+  if (r.status === 429) { res.setHeader("retry-after", String(r.retryAfter)); return fail(res, 429, "Probaste muchas veces. Esperá un minuto y volvé a intentar."); }
+  if (!r.ok) return fail(res, 401, "Usuario o contraseña incorrectos.");
+  res.setHeader("set-cookie", `sesion=${r.token}; ${COOKIE_BASE}; Max-Age=43200${esHttps(req) ? "; Secure" : ""}`);
+  return json(res, 200, { nombre: r.usuario.nombre, rol: r.usuario.rol, debeCambiar: r.usuario.debeCambiar });
+}
+
+function yo(req, res, { yo }) {
+  return json(res, 200, { id: yo.id, usuario: yo.usuario, nombre: yo.nombre, rol: yo.rol, debeCambiar: yo.debeCambiar, metodo: yo.metodo || "clave" });
+}
+
+function salir(req, res) {
+  auth.salir(cookieDe(req, "sesion"));
+  // Borra las dos: la sesión vieja y el JWT de Google. El JWT en sí sigue valiendo hasta que vence
+  // (no se guarda en ningún lado); para cortarlo antes, se sube token_version del usuario.
+  res.setHeader("set-cookie", [`sesion=; ${COOKIE_BASE}; Max-Age=0`, `acceso=; ${COOKIE_BASE}; Max-Age=0`]);
+  return json(res, 200, { ok: true });
+}
+
+async function cambiarClave(req, res) {
+  const body = await bodyObject(req, res, 4096, "");
+  if (!body) return;
+  const r = auth.cambiarClave(cookieDe(req, "sesion"), { actual: body.actual, nueva: body.nueva });
+  return r.ok ? json(res, 200, { ok: true }) : fail(res, r.status, r.mensaje);
+}
+
+module.exports = { ingresar, yo, salir, cambiarClave };

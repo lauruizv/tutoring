@@ -1,0 +1,40 @@
+{
+  "nombre": "cal-mkt-01-excelente",
+  "descripcion": "Sigue el guion completo: se presenta, valida antes de hablar de la deuda, no juzga, pregunta qué puede pagar y cuándo, arma el plan con lo que contó el cliente, lee el acuerdo, pide la conformidad, dicta el número de gestión y cierra.",
+  "origen": "sintético, para calibrar (no es una conversación real)",
+  "empresa": "mkt",
+  "escenarioId": "mkt-cobranza",
+  "candidato": "Candidato de prueba",
+  "minutos": 6,
+  "esperado": {
+    "total": { "min": 80, "max": 100 },
+    "criterios": {
+      "Escucha activa": { "min": 4, "max": 5 },
+      "Empatía y control emocional": { "min": 4, "max": 5 },
+      "Claridad": { "min": 4, "max": 5 },
+      "Procedimiento": { "min": 4, "max": 5 },
+      "Resolución": { "min": 4, "max": 5 },
+      "Cierre": { "min": 4, "max": 5 }
+    }
+  },
+  "transcripcion": [
+    { "role": "assistant", "text": "¿Hola?" },
+    { "role": "user", "text": "Hola, buen día, te habla Lucas Ferreira, de ConectAR. ¿Hablo con Diego Sosa?" },
+    { "role": "assistant", "text": "Sí, soy yo. ¿Qué pasó?" },
+    { "role": "user", "text": "Gracias, Diego. Para que sepas que te llamamos de ConectAR y confirmar que hablo con vos: en el sistema figura el DNI 33.221.004 y la fecha de nacimiento 9 de noviembre de 1991. ¿Son los tuyos?" },
+    { "role": "assistant", "text": "Sí, son los míos." },
+    { "role": "user", "text": "Gracias por confirmar. Te llamo porque figuran dos facturas pendientes, la de agosto y la de septiembre, que suman 38.000 pesos. Quería ver con vos cómo lo podemos resolver." },
+    { "role": "assistant", "text": "Ya sé, ya sé... Mirá, me quedé sin un laburo hace dos meses y se me juntó todo. Ahora estoy en una obra, pero no llego a pagar todo junto." },
+    { "role": "user", "text": "Entiendo, Diego, quedarte sin trabajo te desordena todo, y se nota que lo querés resolver. Por eso te pregunto: ¿cuánto podrías pagar ahora y cuándo te entra la próxima plata?" },
+    { "role": "assistant", "text": "Ahora podría poner diez mil, más o menos. Y a fin de mes cobro la quincena de la obra." },
+    { "role": "user", "text": "Bien. Entonces te propongo esto, sin interés: una primera cuota de 10.000 pesos este viernes, con lo que tenés ahora, y el resto, 28.000, en dos cuotas de 14.000: una el 30 de este mes, cuando cobrás, y otra el 30 del mes que viene. ¿Te sirve así o preferís otro reparto?" },
+    { "role": "assistant", "text": "Sí, así me sirve. ¿Puedo pagar por transferencia?" },
+    { "role": "user", "text": "Sí. Al cortar te llega por SMS el CBU para transferir. Te leo cómo queda el acuerdo: 10.000 pesos este viernes, 14.000 el 30 de este mes y 14.000 el 30 del mes que viene, por transferencia, sin interés. Si estás de acuerdo, decime \"sí, acepto\"." },
+    { "role": "assistant", "text": "Sí, acepto." },
+    { "role": "user", "text": "Listo, quedó registrado. Te paso el número de gestión, anotalo: ocho ocho uno dos, guion, cuatro seis uno. ¿Lo pudiste anotar?" },
+    { "role": "assistant", "text": "Ocho ocho uno dos, cuatro seis uno. Sí, lo anoté." },
+    { "role": "user", "text": "Perfecto. Con ese número, si tenés cualquier problema con un pago, llamás y lo vemos. ¿Hay algo más en lo que te pueda ayudar?" },
+    { "role": "assistant", "text": "No, nada más. Gracias, me sacaste un peso de encima." },
+    { "role": "user", "text": "Gracias a vos, Diego. Que andes bien en la obra." }
+  ]
+}

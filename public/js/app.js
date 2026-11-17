@@ -39,6 +39,16 @@
   const firstName = n => (n || "").split(/\s+/)[0] || n;
   const enPersona = e => T.prompts.enPersona(e);
   const clientName = e => (e.cliente || "El cliente").split(",")[0].trim();
+  // "Lo que tenés a mano" (campo `ficha` del escenario): una línea por dato, con "Título: texto" opcional.
+  const fichaItems = e => String((e && e.ficha) || "").split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const m = l.match(/^([^:"]{2,40}):\s*(.+)$/);
+    return m ? { titulo: m[1], texto: m[2] } : { titulo: "", texto: l };
+  });
+  // Quién arranca la llamada (ver prompts.js): "atiende" = entrante, "llama" = saliente.
+  const INICIO_LLAMADA = {
+    atiende: { brief: "Llamada entrante: cuando arranca, atendés vos y saludás primero.", espera: "Atendiste la llamada: saludá vos primero" },
+    llama: { brief: "Llamada saliente: llamás vos. Cuando atiendan, presentate y decí para qué llamás.", espera: "" }
+  };
   const fmtDate = iso => { try { return new Date(iso).toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch (_) { return iso; } };
   const fmtDur = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   let toastT;
@@ -57,6 +67,7 @@
     check: '<circle cx="10" cy="10" r="7"/><path d="M7 10l2 2 4-4"/>',
     chevron: '<path d="M5 8l5 5 5-5"/>',
     x: '<path d="M5 5l10 10M15 5 5 15"/>',
+    copy: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7"/>',
     mic: '<rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5"/>',
     micOff: '<path d="M3 3l14 14"/><path d="M7 7v2.5a3 3 0 0 0 5 2.2M13 9V5.5a3 3 0 0 0-5.8-1"/><path d="M4.5 9.5a5.5 5.5 0 0 0 9 4.2M15.5 9.5c0 .6-.1 1.2-.3 1.7M10 15v2.5"/>',
     keyboard: '<rect x="2.5" y="5" width="15" height="10" rx="2"/><path d="M5.5 8h1M8.5 8h1M11.5 8h1M14.5 8h0M6 12h8"/>',
@@ -64,6 +75,7 @@
     phone: '<path d="M5.2 3h2.6l1.3 3.4-1.7 1.1a8.5 8.5 0 0 0 5.1 5.1l1.1-1.7 3.4 1.3v2.6a1.6 1.6 0 0 1-1.7 1.6A13.5 13.5 0 0 1 3.6 4.7 1.6 1.6 0 0 1 5.2 3z"/>',
     hangup: '<path d="M2.5 11.5c4.2-4 10.8-4 15 0l-1.9 2.3-3.1-1.3v-2.1a9 9 0 0 0-5 0v2.1l-3.1 1.3z"/>',
     play: '<path d="M6 4l10 6-10 6z"/>',
+    stop: '<rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/>',
     download: '<path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 17h12"/>',
     back: '<path d="M12 4 6 10l6 6"/>',
     trash: '<path d="M4 6h12M8 6V4h4v2M6 6l1 11h6l1-11"/>',
@@ -73,6 +85,9 @@
     down: '<path d="M5 8l5 5 5-5"/>'
   };
   const icon = k => svg(ICON[k]);
+  // Filtros de las listas de informes: los días como los da el campo de fecha ("2026-11-10") y los textos tal cual.
+  const filtrosVacios = () => ({ desde: "", hasta: "", escenario: "", candidato: "" });
+  const hayFiltros = v => Object.values(v).some(Boolean);
 
   // ------------------------------------------------------------------
   // Estado
@@ -83,9 +98,12 @@
     params: {},
     cfg: null,          // configuración de la empresa (la carga la persona responsable)
     server: null,       // /api/config
-    candidato: store.get("tutoring.candidato", "Lucas Ferreyra"),
-    voiceName: store.get("tutoring.voice", ""),
-    informes: [],
+    usuario: null,      // /api/yo: { id, usuario, nombre, rol, debeCambiar }
+    candidato: "",      // el nombre sale de la sesión
+    voiceName: "",
+    informes: [],       // todos los informes del candidato, sin filtros (los últimos se ven en el inicio)
+    filtros: { misinformes: filtrosVacios(), informes: filtrosVacios() },   // lo elegido en cada lista de informes
+    listaInformes: { huella: null, items: [] },   // última lista filtrada que devolvió el servidor, y para qué búsqueda
     dirty: false,
     engine: null,
     timer: null,
@@ -93,17 +111,19 @@
     report: null
   };
   let navToken = 0;   // corta el trabajo asíncrono de una pantalla que ya se abandonó
-  const J = store.get("tutoring.junior", { chats: [], current: null }); // chats del junior
-  const JUNIOR = { name: "Camila Ruiz", role: "Junior · semana 3" };
+  // Lo que se guarda en este navegador va separado por usuario: en un aula varios comparten la compu.
+  const k = n => "tutoring." + (S.usuario ? S.usuario.id : "anonimo") + "." + n;
+  let J = { chats: [], current: null }; // chats del junior (se cargan al ingresar)
   // Guardamos solo las últimas conversaciones: el localStorage tiene ~5 MB y los
   // chats con código pegado lo llenan rápido.
   const MAX_CHATS = 20;
   const saveJ = () => {
     if (J.chats.length > MAX_CHATS) J.chats = J.chats.slice(-MAX_CHATS);
-    store.set("tutoring.junior", { chats: J.chats.map(c => ({ ...c, turns: c.turns.filter(t => !t.pending) })), current: J.current });
+    store.set(k("junior"), { chats: J.chats.map(c => ({ ...c, turns: c.turns.filter(t => !t.pending) })), current: J.current });
   };
 
   const VIEW_LABEL = {
+    login: "Ingresar", nuevaClave: "Creá tu contraseña", cuenta: "Tu cuenta",
     sims: "Simulaciones por voz", misinformes: "Mis informes", brief: "Simulación", call: "Llamada en curso", corta: "Llamada muy corta", evaluating: "Evaluando", report: "Informe",
     chat: "Mentor del equipo",
     contexto: "Contexto de la empresa", escenarios: "Escenarios de simulación", criterios: "Criterios de evaluación", informes: "Informes de candidatos"
@@ -124,14 +144,16 @@
     $("side").classList.remove("open");
     $("menu").setAttribute("aria-expanded", "false");
   }
-  function setProfile(p) {
-    if (S.dirty && S.profile === "empresa" && p !== "empresa" && !confirm("Hay cambios sin guardar en la configuración. ¿Salir igual? (Los cambios siguen aplicados en esta sesión.)")) return;
-    S.profile = p;
-    go(p === "estudiante" ? "sims" : p === "junior" ? "chat" : "contexto");
-  }
+  const INICIO = { estudiante: "sims", junior: "chat", empresa: "informes" };
+  const ROL_LABEL = { estudiante: "Candidato", junior: "Junior", empresa: "Empresa" };
 
   function render() {
-    document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.profile === S.profile)));
+    // Lo que deja abierto una vista (por ejemplo, el micrófono de la prueba de audio) se cierra al salir o redibujar.
+    if (S.alSalirDeVista) { const f = S.alSalirDeVista; S.alSalirDeVista = null; try { f(); } catch (_) {} }
+    // Sin sesión (o con la contraseña por crear) no hay barra lateral ni barra superior.
+    document.body.classList.toggle("sin-sesion", !S.usuario || S.usuario.debeCambiar);
+    document.body.dataset.rol = S.usuario ? S.usuario.rol : "";
+    cerrarMenuCuenta();
     renderSide();
     renderTop();
     const view = $("view");
@@ -184,10 +206,10 @@
 
   function renderSide() {
     const nav = $("sideNav"); nav.replaceChildren();
-    let person;
+    if (!S.usuario || !S.cfg) return;
+    const person = { name: S.usuario.nombre, role: ROL_LABEL[S.usuario.rol] || S.usuario.rol };
     if (S.profile === "estudiante") {
       nav.append(h("nav", { class: "nav" }, navBtn("sims", "Simulaciones", "sims"), navBtn("misinformes", "Mis informes", "reports")));
-      person = { name: S.candidato, role: "Estudiante · UTN" };
     } else if (S.profile === "junior") {
       nav.append(h("button", { class: "new", onclick: () => { J.current = null; saveJ(); go("chat"); $("input").focus(); } }, svg('<path d="M8 3v10M3 8h10" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>', "0 0 16 16"), "Nuevo chat"));
       nav.append(h("div", { class: "side-label", text: "Conversaciones" }));
@@ -195,13 +217,10 @@
       if (!J.chats.some(deEstaEmpresa)) hist.append(h("div", { class: "empty", text: "Todavía no hay conversaciones." }));
       J.chats.slice().reverse().filter(deEstaEmpresa).forEach(c => hist.append(h("button", { class: c.id === J.current ? "on" : null, text: c.title, title: c.title, onclick: () => { J.current = c.id; saveJ(); go("chat"); } })));
       nav.append(hist);
-      person = JUNIOR;
     } else {
       nav.append(h("nav", { class: "nav" },
         navBtn("contexto", "Contexto", "ctx"), navBtn("escenarios", "Escenarios", "esc"),
         navBtn("criterios", "Criterios", "crit"), navBtn("informes", "Informes", "reports")));
-      const r = S.cfg.responsable || {};
-      person = { name: r.nombre || "Responsable", role: (r.rol ? r.rol + " · " : "") + S.cfg.empresa };
     }
     $("meName").textContent = person.name; $("meRole").textContent = person.role; $("meAv").textContent = initials(person.name);
   }
@@ -213,8 +232,6 @@
   // ------------------------------------------------------------------
   VIEWS.sims = view => {
     const col = h("div", { class: "col" });
-    const nameInput = h("input", { id: "candidato", type: "text", value: S.candidato, "aria-label": "Tu nombre",
-      onchange: e => { S.candidato = e.target.value.trim() || "Candidato"; store.set("tutoring.candidato", S.candidato); renderSide(); } });
     const cards = h("div", { class: "cards" });
     if (!S.cfg.escenarios.length) cards.append(h("div", { class: "notice", text: "Todavía no hay escenarios cargados. La persona responsable los crea desde el perfil Empresa → Escenarios." }));
     S.cfg.escenarios.forEach(e => cards.append(
@@ -226,8 +243,7 @@
       h("div", { class: "orb", "aria-hidden": "true" }),
       h("p", { class: "hello", text: `Hola, ${firstName(S.candidato)}` }),
       h("h1", { class: "ask", text: "¿Qué situación querés practicar?" }),
-      h("p", { class: "sub", text: `Hablás por voz con un cliente de ${S.cfg.empresa}. Al terminar, recibís un informe con tus fortalezas y lo que podés mejorar.` }),
-      h("div", { class: "name-row" }, h("label", { for: "candidato", text: "Practicás como" }), nameInput),
+      h("p", { class: "sub", text: `Hablás por voz con un cliente o con alguien del equipo de ${S.cfg.empresa}. Al terminar, recibís un informe con tus fortalezas y lo que podés mejorar.` }),
       cards));
     const mine = S.informes.filter(r => r.candidato === S.candidato).slice(0, 5);
     if (mine.length) {
@@ -246,30 +262,207 @@
     return list;
   }
 
+  // ------------------------------------------------------------------
+  // Listas de informes con filtros ("Mis informes" del candidato e "Informes" de la empresa)
+  // ------------------------------------------------------------------
+  // Barra de filtros. No le pide nada al servidor: deja lo elegido en `valores` y avisa con alCambiar().
+  // `acciones` son botones que van al final de la barra (los de exportar); la barra no sabe qué hacen.
+  function barraFiltros({ valores, conCandidato, alCambiar, acciones = [] }) {
+    const desde = h("input", { type: "date", id: "fDesde", value: valores.desde });
+    const hasta = h("input", { type: "date", id: "fHasta", value: valores.hasta });
+    const escenario = h("select", { id: "fEscenario" });
+    const candidato = conCandidato ? h("input", { type: "search", id: "fCandidato", list: "fCandidatos", placeholder: "Nombre o mail", autocomplete: "off", value: valores.candidato }) : null;
+    const nombres = conCandidato ? h("datalist", { id: "fCandidatos" }) : null;
+    const limpiar = h("button", { class: "btn-o", type: "button", id: "fLimpiar", text: "Limpiar", disabled: !hayFiltros(valores) });
+    const aviso = errorForm("");
+    let espera = null;
+
+    // Las opciones llegan del servidor después de dibujar. La simulación elegida se mantiene aunque ya no esté en la lista.
+    function ponerOpciones(op) {
+      const titulos = [...new Set([...(op.escenarios || []), valores.escenario].filter(Boolean))];
+      escenario.replaceChildren(h("option", { value: "", text: "Todas" }), ...titulos.map(t => h("option", { value: t, text: t })));
+      escenario.value = valores.escenario;
+      if (nombres) nombres.replaceChildren(...(op.candidatos || []).map(n => h("option", { value: n })));
+    }
+    function cambio() {
+      const alReves = Boolean(valores.desde && valores.hasta && valores.desde > valores.hasta);
+      aviso.textContent = alReves ? "“Desde” no puede ser posterior a “Hasta”." : "";
+      aviso.hidden = !alReves;
+      limpiar.disabled = !hayFiltros(valores);
+      if (!alReves) alCambiar();
+    }
+    desde.addEventListener("change", () => { valores.desde = desde.value; cambio(); });
+    hasta.addEventListener("change", () => { valores.hasta = hasta.value; cambio(); });
+    escenario.addEventListener("change", () => { valores.escenario = escenario.value; cambio(); });
+    // Al escribir el nombre se espera a que la persona deje de tipear, para no pedir la lista con cada letra.
+    if (candidato) candidato.addEventListener("input", () => {
+      valores.candidato = candidato.value.trim();
+      clearTimeout(espera); espera = setTimeout(cambio, 300);
+    });
+    limpiar.addEventListener("click", () => {
+      Object.assign(valores, filtrosVacios());
+      desde.value = hasta.value = escenario.value = "";
+      if (candidato) candidato.value = "";
+      clearTimeout(espera); cambio();
+    });
+    ponerOpciones({});
+
+    const el = h("div", { class: "filtros", role: "search", "aria-label": "Filtrar informes" },
+      field("Desde", "", desde), field("Hasta", "", hasta), field("Simulación", "", escenario),
+      candidato ? field("Candidato", "", candidato) : null, nombres, limpiar,
+      acciones.length ? h("div", { class: "acciones" }, ...acciones) : null, aviso);
+    return { el, ponerOpciones, cerrar: () => clearTimeout(espera) };
+  }
+
+  // Le entrega al navegador un archivo ya bajado, para que lo guarde con ese nombre.
+  function guardarArchivo(blob, nombre) {
+    const url = URL.createObjectURL(blob);
+    const enlace = h("a", { href: url, download: nombre, hidden: true });
+    document.body.append(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Lista de informes con su barra de filtros. Devuelve los elementos para agregar a la vista.
+  //   clave        dónde quedan los filtros elegidos (S.filtros[clave]): siguen puestos al volver de un informe.
+  //   fijo         filtro que la persona no elige (la empresa cargada).
+  //   conCandidato muestra el filtro por candidato y el nombre en cada fila (solo la empresa).
+  //   exportable   agrega los botones para bajar el listado a Excel y PDF (solo la empresa).
+  //   sinNada      texto cuando no hay ningún informe y no hay filtros puestos.
+  function listaDeInformes({ clave, fijo, conCandidato, exportable, sinNada }) {
+    const valores = S.filtros[clave];
+    const lista = h("div", { class: "informes-lista", "aria-live": "polite" });
+    // Se exporta lo que está en pantalla: la búsqueda de la lista que se ve (`mostrado`), no lo que se está tipeando.
+    let mostrado = null, exportando = false;
+    const botones = !exportable ? [] : [["xlsx", "Excel"], ["pdf", "PDF"]].map(([formato, nombre]) => {
+      return h("button", { class: "btn-o", type: "button", id: "exportar-" + formato, title: `Bajar esta lista en ${nombre}`, disabled: true,
+        onclick: () => exportar(formato, nombre) }, icon("download"), nombre);
+    });
+    const habilitarBotones = () => botones.forEach(b => { b.disabled = exportando || !mostrado || !mostrado.cantidad; });
+    async function exportar(formato, nombre) {
+      if (exportando || !mostrado) return;
+      // Mientras se genera no se puede pedir otro. El aviso queda hasta que lo reemplaza el del resultado
+      // (el texto del botón no cambia: al ser más largo movía de lugar toda la barra).
+      exportando = true; habilitarBotones();
+      toast(`Generando el ${nombre}…`, 120000);
+      try {
+        const archivo = await T.api.informes.exportar(formato, mostrado.filtro);
+        guardarArchivo(archivo.blob, archivo.nombre);
+        toast(`Listo: ${archivo.cantidad === 1 ? "1 informe" : archivo.cantidad + " informes"} en ${archivo.nombre}.`, 4000);
+      } catch (err) {
+        toast("No se pudo exportar: " + T.api.errorCopy(err), 5000);
+      } finally {
+        exportando = false; habilitarBotones();
+      }
+    }
+
+    const barra = barraFiltros({ valores, conCandidato, alCambiar: buscar, acciones: botones });
+    barra.el.hidden = true;
+    let pedido = 0, pintada = false;
+
+    function pintar(items, filtro) {
+      pintada = true;
+      mostrado = { filtro, cantidad: items.length };
+      habilitarBotones();
+      // Sin informes y sin filtros no hay nada que filtrar: queda solo el mensaje.
+      barra.el.hidden = !items.length && !hayFiltros(valores);
+      lista.replaceChildren(items.length ? reportList(items, conCandidato)
+        : h("p", { class: "muted", text: hayFiltros(valores) ? "No hay informes con estos filtros." : sinNada }));
+    }
+    async function buscar() {
+      const mio = ++pedido;
+      const filtro = Object.assign(T.core.rangoDeDias(valores.desde, valores.hasta), { candidato: valores.candidato, escenario: valores.escenario }, fijo);
+      const huella = JSON.stringify([S.usuario.id, filtro]);
+      // Si ya está guardada la lista de esta misma búsqueda (por ejemplo, al volver de un informe),
+      // se muestra al instante y se actualiza por detrás. Si es otra búsqueda, queda la anterior hasta que llegue.
+      if (S.listaInformes.huella === huella) pintar(S.listaInformes.items, filtro);
+      else if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "Cargando…" }));
+      try {
+        const items = await T.api.informes.list(filtro);
+        if (mio !== pedido) return;   // llegó tarde: ya se pidió una búsqueda más nueva
+        S.listaInformes = { huella, items };
+        if (lista.isConnected) pintar(items, filtro);
+      } catch (err) {
+        if (mio !== pedido || !lista.isConnected) return;
+        if (!pintada) lista.replaceChildren(h("p", { class: "muted", text: "No se pudieron cargar los informes." }));
+        toast("No se pudieron actualizar los informes: " + T.api.errorCopy(err));
+      }
+    }
+    buscar();
+    T.api.informes.opciones(fijo).then(op => { if (lista.isConnected) barra.ponerOpciones(op); }).catch(() => {});
+    S.alSalirDeVista = barra.cerrar;
+    return [barra.el, lista];
+  }
+
   VIEWS.misinformes = view => {
     const col = h("div", { class: "col", style: "padding-top:20px" });
-    col.append(h("h1", { text: "Mis informes", style: "font-size:24px;font-weight:600" }));
-    const mine = S.informes.filter(r => r.candidato === S.candidato);
-    col.append(mine.length ? reportList(mine) : h("p", { class: "muted", text: "Todavía no hiciste ninguna simulación." }));
+    col.append(h("h1", { text: "Mis informes", style: "font-size:24px;font-weight:600" }),
+      ...listaDeInformes({ clave: "misinformes", conCandidato: false, sinNada: "Todavía no hiciste ninguna simulación." }));
     view.append(col);
   };
 
   // ------------------------------------------------------------------
   // ESTUDIANTE: antes de la llamada
   // ------------------------------------------------------------------
+  // Lista de "Lo que tenés a mano". En la llamada (copiar: true), cada dato tiene su botón para copiarlo.
+  function fichaLista(items, { copiar = false, alCopiar = null } = {}) {
+    return h("ul", { class: copiar ? "tips ficha-lista" : "tips" }, ...items.map(it => {
+      const dato = [it.titulo ? h("b", { text: it.titulo + ": " }) : null, it.texto];
+      if (!copiar) return h("li", null, ...dato);
+      return h("li", null, h("span", null, ...dato),
+        h("button", { class: "copiar", type: "button", title: "Copiar", "aria-label": `Copiar: ${it.titulo || it.texto.slice(0, 40)}`, onclick: () => { if (alCopiar) alCopiar(); copiarTexto(it.texto); } }, icon("copy")));
+    }));
+  }
+  async function copiarTexto(texto) {
+    try { await navigator.clipboard.writeText(texto); toast("Copiado."); }
+    catch (_) { toast("El navegador no dejó copiar: seleccioná el texto a mano."); }
+  }
+
+  // Grabación de la simulación (opcional). Lo que acepta el candidato queda guardado en el informe:
+  // el texto exacto que leyó y su versión. Si se cambia el texto, hay que cambiar la versión.
+  const GRABACION = {
+    version: "2026-11-11",
+    titulo: "Grabar el audio de esta simulación (opcional)",
+    explicacion: (empresa, dias) => `Si aceptás, se graba tu voz y la del cliente simulado para que en el informe se puedan escuchar los fragmentos destacados. Lo vas a poder escuchar vos y lo va a poder escuchar ${empresa}. Se borra a los ${dias} días. Si no aceptás, la simulación y el informe funcionan igual, sin audio.`,
+    casilla: "Acepto que se grabe el audio de esta simulación."
+  };
+  // La casilla del brief. Arranca sin marcar en cada simulación: la aceptación vale solo para esa llamada.
+  // Deja en S.grabacion lo que se le mostró a la persona y lo que respondió.
+  function casillaDeGrabacion() {
+    const explicacion = GRABACION.explicacion(S.cfg.empresa, (S.server.audio && S.server.audio.dias) || 90);
+    S.grabacion = { aceptado: false, version: GRABACION.version, texto: [GRABACION.titulo, explicacion, GRABACION.casilla].join("\n"), fecha: new Date().toISOString() };
+    const casilla = h("input", { type: "checkbox", id: "aceptaGrabacion", onchange: ev => {
+      S.grabacion.aceptado = ev.target.checked;
+      S.grabacion.fecha = new Date().toISOString();
+    } });
+    return h("div", { class: "grabacion" },
+      h("div", { class: "eyebrow", text: GRABACION.titulo }),
+      h("p", { text: explicacion }),
+      h("label", { for: "aceptaGrabacion" }, casilla, GRABACION.casilla));
+  }
+
   VIEWS.brief = view => {
     const e = S.cfg.escenarios.find(x => x.id === S.params.id);
     if (!e) return go("sims");
+    S.grabacion = null;   // la grabación se ofrece (y se acepta o no) de nuevo en cada simulación
     const sup = T.voice.support();
     const col = h("div", { class: "col brief" });
     col.append(h("button", { class: "btn-o", style: "align-self:flex-start", onclick: () => go("sims") }, icon("back"), "Volver"));
     col.append(h("div", null, h("div", { class: "eyebrow", text: `Simulación · ${e.duracion || 5} min` }), h("h1", { text: e.titulo }), h("p", { class: "lead", text: e.resumen })));
     col.append(h("div", { class: "info" },
-      h("div", null, h("div", { class: "eyebrow", text: "Con quién hablás" }), h("p", { text: e.cliente })),
-      h("div", null, h("div", { class: "eyebrow", text: "Tu objetivo" }), h("p", { text: e.objetivo }))));
+      h("div", null, h("div", { class: "eyebrow", text: "Con quién hablás" }), h("p", { text: e.cliente }))));
+    // Lo que un operador ve en el sistema y las reglas de la campaña: sin esto no sabe qué ofrecer ni qué validar.
+    const ficha = fichaItems(e);
+    if (ficha.length) col.append(h("div", { class: "info una" },
+      h("div", null, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }), fichaLista(ficha))));
+    if (e.glosario && e.glosario.length) col.append(h("div", { class: "info" },
+      h("div", null, h("div", { class: "eyebrow", text: "Palabras que vas a escuchar" }),
+        h("ul", { class: "tips" }, ...e.glosario.map(g => h("li", null, h("b", { text: g.termino + ": " }), g.significa))))));
     col.append(h("ul", { class: "tips" },
-      h("li", { text: "Hablá con naturalidad. Cuando hacés una pausa, el cliente responde." }),
-      h("li", { text: "Si el cliente está hablando, tocá la esfera para interrumpirlo." }),
+      INICIO_LLAMADA[e.inicio] ? h("li", null, h("b", { text: INICIO_LLAMADA[e.inicio].brief })) : null,
+      h("li", { text: `Hablá con naturalidad. Cuando hacés una pausa, ${clientName(e)} responde.` }),
+      h("li", { text: `Si ${clientName(e)} está hablando, tocá la esfera para interrumpir.` }),
       h("li", { text: enPersona(e) ? "La conversación termina cuando se despiden o cuando tocás Terminar." : "La llamada termina cuando se despiden o cuando tocás Colgar." })));
 
     if (!S.server.hasKey) col.append(h("div", { class: "notice red", text: S.server.problema || `Falta la API key: pegala en el archivo .env (${S.server.keyVar || "API key"}) y reiniciá el servidor.` }));
@@ -280,10 +473,8 @@
     const vozCfg = S.server.voice || {};
     if (vozCfg.provider === "gemini-live" && !(vozCfg.geminiLive && vozCfg.geminiLive.disponible)) col.append(h("div", { class: "notice", text: `Falta GEMINI_API_KEY en el .env: esta simulación usa ${motorDeVoz() === "vapi" ? "Vapi" : "la voz del navegador"}. Para la voz natural con Gemini Live, cargá la key y reiniciá el servidor.` }));
     if (vozCfg.provider === "vapi" && !vozCfg.vapiPublicKey) col.append(h("div", { class: "notice", text: "Falta VAPI_PUBLIC_KEY en el .env: esta simulación usa la voz del navegador. Para la conversación natural con Vapi, cargá la key y reiniciá el servidor." }));
-    if (motorDeVoz() === "gemini-live") col.append(h("p", { class: "muted", text: "Voz natural con Gemini Live: podés interrumpir al cliente hablando encima. Con auriculares suena mejor." }));
-    if (motorDeVoz() === "vapi") col.append(h("p", { class: "muted", text: "Voz natural con Vapi: podés interrumpir al cliente hablando encima." }));
     if (motorDeVoz() === "browser") {
-      const sel = h("select", { id: "voiceSel", "aria-label": "Voz del cliente", onchange: ev => { S.voiceName = ev.target.value; store.set("tutoring.voice", S.voiceName); } });
+      const sel = h("select", { id: "voiceSel", "aria-label": "Voz del cliente", onchange: ev => { S.voiceName = ev.target.value; store.set(k("voice"), S.voiceName); } });
       const test = h("button", { class: "btn-o", onclick: () => {
         if (!("speechSynthesis" in window)) return;
         speechSynthesis.cancel();
@@ -300,9 +491,129 @@
       });
       col.append(h("div", { class: "voice-row" }, h("label", { for: "voiceSel", class: "muted", text: "Voz del cliente" }), sel, test));
     }
+    col.append(pruebaDeAudio(motorDeVoz() === "gemini-live"));
+    // Solo con Gemini Live se pueden grabar las dos voces: con las otras voces no se ofrece.
+    if (motorDeVoz() === "gemini-live" && T.audio.sePuedeGrabar()) col.append(casillaDeGrabacion());
     col.append(h("div", null, h("button", { class: "btn lg", id: "startCall", disabled: !S.server.hasKey, onclick: () => go("call", { id: e.id }) }, icon(enPersona(e) ? "esc" : "phone"), enPersona(e) ? "Empezar conversación" : "Empezar llamada")));
     view.append(col);
   };
+
+  // Antes de la llamada: elegir micrófono y salida, ver que el micrófono capte y escuchar un sonido de prueba.
+  // Elegir dispositivo solo lo respeta Gemini Live; con los otros motores se usan los del sistema.
+  function pruebaDeAudio(eligeDispositivos) {
+    const md = navigator.mediaDevices;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const eligeSalida = eligeDispositivos && AC && typeof AC.prototype.setSinkId === "function";
+    let stream = null, ctx = null, raf = 0, activo = true, seEscucho = false;
+    const guardar = () => store.set(k("audio"), S.audio);
+
+    const barra = h("i");
+    const nivel = h("div", { class: "nivel", role: "meter", "aria-label": "Nivel del micrófono", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "0", hidden: true }, barra);
+    const msg = h("p", { class: "audio-msg", "aria-live": "polite" });
+    const decir = (texto, tipo) => { msg.textContent = texto; msg.className = "audio-msg" + (tipo ? " " + tipo : ""); };
+    const selIn = h("select", { "aria-label": "Micrófono", onchange: ev => { S.audio.entrada = ev.target.value; guardar(); abrirMic(); } });
+    const selOut = h("select", { "aria-label": "Salida de audio", onchange: ev => { S.audio.salida = ev.target.value; guardar(); } });
+    const permitir = h("button", { class: "btn-o", type: "button", onclick: () => abrirMic() }, icon("mic"), "Probar micrófono");
+    const probar = h("button", { class: "btn-o", type: "button", onclick: () => sonar() }, icon("play"), "Probar sonido");
+
+    async function listar() {
+      if (!eligeDispositivos || !md || !md.enumerateDevices) return;
+      let disp = [];
+      try { disp = await md.enumerateDevices(); } catch (_) {}
+      const llenar = (sel, tipo, nombre, elegido) => {
+        // "default" y "communications" son alias de Chrome: el predeterminado ya es la primera opción.
+        const lista = disp.filter(d => d.kind === tipo && d.deviceId && !/^(default|communications)$/.test(d.deviceId));
+        sel.replaceChildren(h("option", { value: "", text: "Predeterminado del sistema" }),
+          ...lista.map((d, i) => h("option", { value: d.deviceId, text: d.label || `${nombre} ${i + 1}`, selected: d.deviceId === elegido })));
+        if (elegido && !lista.some(d => d.deviceId === elegido)) sel.value = "";
+      };
+      llenar(selIn, "audioinput", "Micrófono", S.audio.entrada);
+      if (eligeSalida) llenar(selOut, "audiooutput", "Salida", S.audio.salida);
+    }
+
+    async function abrirMic() {
+      if (!md || !md.getUserMedia || !AC) return decir("Este navegador no permite probar el micrófono. Usá Chrome o Edge.", "mal");
+      cerrarMic();
+      const pedir = id => md.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true });
+      try { stream = await pedir(S.audio.entrada); }
+      catch (e) {
+        // El micrófono elegido ya no está (se desenchufó): volvemos al predeterminado.
+        if (S.audio.entrada && /Overconstrained|NotFound/.test(e && e.name)) {
+          S.audio.entrada = ""; guardar();
+          try { stream = await pedir(""); } catch (e2) { e = e2; }
+        }
+        if (!stream) {
+          return decir(e && e.name === "NotAllowedError"
+            ? "El navegador bloqueó el micrófono. Permitilo desde el candado de la barra de direcciones y volvé a probar."
+            : "No encontramos un micrófono. Conectá uno y volvé a probar.", "mal");
+        }
+      }
+      if (!activo) return cerrarMic();
+      permitir.hidden = true; nivel.hidden = false;
+      seEscucho = false;
+      decir("Decí algo: la barra se tiene que mover.");
+      listar();
+      ctx = new AC();
+      const an = ctx.createAnalyser(); an.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Float32Array(an.fftSize);
+      let suave = 0;
+      const tick = () => {
+        if (!activo || !ctx) return;
+        an.getFloatTimeDomainData(buf);
+        let s = 0; for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+        const v = Math.min(1, Math.sqrt(s / buf.length) * 6);
+        suave = Math.max(v, suave * 0.9);
+        barra.style.width = (suave * 100).toFixed(1) + "%";
+        nivel.setAttribute("aria-valuenow", String(Math.round(suave * 100)));
+        if (!seEscucho && v > 0.12) { seEscucho = true; decir("Te escuchamos bien.", "bien"); }
+        raf = requestAnimationFrame(tick);
+      };
+      tick();
+    }
+    function cerrarMic() {
+      cancelAnimationFrame(raf); raf = 0;
+      if (stream) stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
+      if (ctx) ctx.close().catch(() => {});
+      stream = null; ctx = null;
+    }
+
+    // Dos notas cortas por la salida elegida.
+    async function sonar() {
+      if (!AC) return;
+      const c = new AC();
+      if (eligeSalida && S.audio.salida) { try { await c.setSinkId(S.audio.salida); } catch (_) {} }
+      const t0 = c.currentTime + 0.05;
+      [[660, 0], [880, 0.22]].forEach(([f, d]) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = "sine"; o.frequency.value = f;
+        g.gain.setValueAtTime(0, t0 + d);
+        g.gain.linearRampToValueAtTime(0.22, t0 + d + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + d + 0.5);
+        o.connect(g); g.connect(c.destination);
+        o.start(t0 + d); o.stop(t0 + d + 0.55);
+      });
+      setTimeout(() => c.close().catch(() => {}), 1200);
+      if (!seEscucho) decir("¿Lo escuchaste? Si no, elegí otra salida o subí el volumen.");
+    }
+
+    S.alSalirDeVista = () => { activo = false; cerrarMic(); if (md) md.removeEventListener("devicechange", listar); };
+    if (md && md.addEventListener) md.addEventListener("devicechange", listar);
+    listar();
+    // Si el micrófono ya está permitido, la barra arranca sola, como en las videollamadas.
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "microphone" }).then(p => { if (p.state === "granted" && activo) abrirMic(); }, () => {});
+    }
+
+    const fila = (etiqueta, control, ...resto) => h("div", { class: "audio-fila" },
+      h("span", { class: "audio-lbl", text: etiqueta }), control, h("div", { class: "audio-acc" }, ...resto));
+    const delSistema = t => h("span", { class: "audio-sis", text: t });
+    return h("div", { class: "audio" },
+      h("div", { class: "eyebrow", text: "Antes de llamar, probá tu audio" }),
+      fila("Micrófono", eligeDispositivos ? selIn : delSistema("El del sistema"), nivel, permitir),
+      fila("Salida", eligeSalida ? selOut : delSistema("La del sistema"), probar),
+      msg);
+  }
 
   // ------------------------------------------------------------------
   // ESTUDIANTE: llamada por voz
@@ -315,6 +626,16 @@
     const provider = motorDeVoz();
     const turns = [];
     let muted = false, started = Date.now(), showTx = false;
+    // Grabación: solo con Gemini Live y solo si el candidato marcó la casilla del brief.
+    const grabacion = provider === "gemini-live" && T.audio.sePuedeGrabar() ? S.grabacion : null;
+    const grabadora = grabacion && grabacion.aceptado ? T.audio.crearGrabadora() : null;
+    // En qué segundo de la grabación empieza y termina cada turno (sin grabación, los turnos no llevan tiempos).
+    const cronometro = T.core.cronometroDeTurnos();
+    // Lo que pasa en la llamada además de lo que se dice; al terminar se resume con core.metricasDeLlamada.
+    const uso = { interrupciones: 0, fichaDisponible: false, fichaAbiertaAlEmpezar: false, fichaAperturas: 0, fichaCopias: 0, turnosEscritos: 0, micSilenciado: 0, avisos: 0, grabada: Boolean(grabadora) };
+    const segundoDeGrabacion = () => (grabadora ? grabadora.ahora() : null);
+    const grabando = h("span", { class: "grabando", role: "status", hidden: true, text: "Grabando" });
+    const empezarAGrabar = () => { if (grabadora) { grabadora.empezar(); grabando.hidden = !grabadora.grabando; } };
 
     const orb = h("div", { class: "orb big connecting", role: "button", tabindex: "0", "aria-label": `Interrumpir a ${cName}` });
     const stateLbl = h("div", { class: "state-label", role: "status", "aria-live": "polite", text: "Conectando…" });
@@ -328,18 +649,57 @@
     const kbBtn = h("button", { class: "round", "aria-label": "Escribir en vez de hablar", "aria-pressed": "false", "aria-expanded": "false", title: "Escribir en vez de hablar" }, icon("keyboard"));
     const txBtn = h("button", { class: "round", "aria-label": "Ver transcripción", "aria-pressed": "false", title: "Ver transcripción" }, icon("list"));
     const hang = h("button", { class: "hang", id: "hang" }, icon("hangup"), enPersona(e) ? "Terminar" : "Colgar");
+    // "Lo que tenés a mano" durante la llamada: los datos del brief, que nadie retiene con solo leerlos antes.
+    const ficha = fichaItems(e);
+    const fichaPanel = ficha.length ? h("aside", { class: "ficha-panel", id: "fichaPanel", hidden: true, "aria-label": "Lo que tenés a mano" },
+      h("div", { class: "ficha-head" }, h("div", { class: "eyebrow", text: "Lo que tenés a mano" }),
+        h("button", { class: "cerrar", type: "button", title: "Cerrar", "aria-label": "Cerrar lo que tenés a mano", onclick: () => mostrarFicha(false) }, icon("x"))),
+      fichaLista(ficha, { copiar: true, alCopiar: () => { uso.fichaCopias++; } })) : null;
+    const fichaBtn = fichaPanel ? h("button", { class: "round", "aria-label": "Lo que tenés a mano", "aria-expanded": "false", "aria-controls": "fichaPanel", title: "Lo que tenés a mano", onclick: () => { if (fichaPanel.hidden) uso.fichaAperturas++; mostrarFicha(fichaPanel.hidden); } }, icon("reports")) : null;
+    // Llamada por teléfono con un cliente: suena el timbre y el candidato atiende con un botón (entrante),
+    // o escucha el tono de llamada hasta que el cliente atiende (saliente, "llama").
+    const porTelefono = !enPersona(e) && !T.prompts.esLider(e);
+    const saliente = porTelefono && e.inicio === "llama";
+    // Hasta que el candidato toca el botón verde: Atender (entrante) o Llamar (saliente).
+    let sonando = porTelefono;
+    // En la entrante el candidato saluda primero: conectamos mientras suena, con el micrófono cerrado.
+    const conectaMientrasSuena = sonando && e.inicio === "atiende";
+    const atender = saliente
+      ? h("button", { class: "atender", id: "llamar" }, icon("phone"), "Llamar")
+      : h("button", { class: "atender", id: "atender", disabled: conectaMientrasSuena }, icon("phone"), "Atender");
     const typeInput = h("input", { type: "text", placeholder: "Escribí tu respuesta y apretá Enter", "aria-label": "Tu respuesta" });
-    const typebar = h("form", { class: "typebar", hidden: true, onsubmit: ev => { ev.preventDefault(); S.engine && S.engine.sendText(typeInput.value); typeInput.value = ""; } },
+    const typebar = h("form", { class: "typebar", hidden: true, onsubmit: ev => { ev.preventDefault(); if (S.engine && typeInput.value.trim()) uso.turnosEscritos++; S.engine && S.engine.sendText(typeInput.value); typeInput.value = ""; } },
       typeInput, h("button", { class: "btn", type: "submit", text: "Enviar" }));
 
-    view.append(h("div", { class: "call" },
-      h("div", { class: "call-top" }, h("div", { class: "who" }, h("b", { text: cName }), h("span", { text: e.titulo })), timer),
-      h("div", { class: "stage" }, orb, stateLbl, cap, capU, note),
-      h("div", { class: "controls" }, micBtn, hang, kbBtn, txBtn),
-      typebar, txList));
+    // Mientras suena, la pantalla muestra solo el timbre y el botón verde, al centro (.call.sonando).
+    const llamada = h("div", { class: sonando ? "call sonando" : "call" },
+      h("div", { class: "call-top" }, h("div", { class: "who" }, h("b", { text: cName }), h("span", { text: e.titulo })), h("div", { class: "reloj" }, grabando, timer)),
+      h("div", { class: "stage" }, orb, stateLbl, sonando ? atender : null, cap, capU, note),
+      h("div", { class: "controls" }, micBtn, hang, kbBtn, txBtn, fichaBtn),
+      typebar, txList, fichaPanel);
+    view.append(llamada);
+    const yaAtendio = () => { sonando = false; llamada.classList.remove("sonando"); atender.remove(); };
+
+    // Abierto o cerrado queda guardado por usuario: si lo usó en la llamada anterior, arranca abierto.
+    function mostrarFicha(abrir) {
+      if (!fichaPanel) return;
+      fichaPanel.hidden = !abrir;
+      llamada.classList.toggle("con-ficha", abrir);
+      fichaBtn.classList.toggle("on", abrir);
+      fichaBtn.setAttribute("aria-expanded", String(abrir));
+      store.set(k("fichaAbierta"), abrir);
+      if (!abrir && fichaPanel.contains(document.activeElement)) fichaBtn.focus();
+    }
+    if (fichaPanel) {
+      uso.fichaDisponible = true;
+      if (store.get(k("fichaAbierta"), false)) { uso.fichaAbiertaAlEmpezar = true; mostrarFicha(true); }
+      const alEsc = ev => { if (ev.key === "Escape" && !fichaPanel.hidden) mostrarFicha(false); };
+      document.addEventListener("keydown", alEsc);
+      S.alSalirDeVista = () => document.removeEventListener("keydown", alEsc);
+    }
 
     function addTx(role, text) {
-      turns.push({ role, text });
+      turns.push(Object.assign({ role, text }, cronometro.cerrar(role, segundoDeGrabacion())));
       txList.append(h("div", { class: "ln " + (role === "user" ? "u" : "c") }, h("b", { text: role === "user" ? firstName(S.candidato) : cName }), text));
     }
     function abrirTeclado(foco) {
@@ -350,34 +710,55 @@
     }
     const LABEL = { connecting: "Conectando…", listening: "Te escucho", thinking: `${firstName(cName)} está pensando`, speaking: `${firstName(cName)} está hablando · tocá para interrumpir`, ended: "Llamada terminada" };
 
+    // Une la llamada con su informe para sumar los costos en el log del servidor.
+    S.simulacion = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
     const engine = T.voice.create(provider, {
+      simulacion: S.simulacion,
       voiceName: S.voiceName,
       vapiPublicKey: S.server.voice.vapiPublicKey,
       vapiAssistantId: S.server.voice.vapiAssistantId,
       vapi: S.server.voice.vapi,
       geminiLive: S.server.voice.geminiLive,
-      escenario: e
+      escenario: e,
+      telefono: S.cfg.vozTelefonica !== false,
+      entrada: S.audio && S.audio.entrada,
+      salida: S.audio && S.audio.salida,
+      grabadora
     });
     S.engine = engine;
 
     function onEvent(ev) {
       if (S.engine !== engine) return;
+      if (grabadora && ev.type !== "level") { cronometro.evento(ev, segundoDeGrabacion()); grabando.hidden = !grabadora.grabando; }
       switch (ev.type) {
         case "state":
+          if (sonando) { if (ev.state === "listening") atender.disabled = false; break; }
+          // Saliente: sigue sonando el tono ("Llamando a…") hasta que el cliente atiende y habla.
+          if (saliente && S.timbre) { if (ev.state !== "speaking") break; pararTimbre(); conectoLaLinea(); }
+          if (S.linea) S.linea.hablando(ev.state === "speaking");
           orb.className = "orb big " + ev.state;
-          stateLbl.textContent = muted && ev.state === "listening" ? "Micrófono silenciado · escribí tu respuesta" : LABEL[ev.state] || "";
+          stateLbl.textContent = ev.state === "listening" && !turns.length && INICIO_LLAMADA[e.inicio] && INICIO_LLAMADA[e.inicio].espera
+            ? INICIO_LLAMADA[e.inicio].espera + (muted ? " · escribí tu saludo" : "")
+            : muted && ev.state === "listening" ? "Micrófono silenciado · escribí tu respuesta"
+            : LABEL[ev.state] || "";
           // Mientras el cliente piensa, dejamos a la vista que la llamada sigue.
           if (ev.state === "thinking") { cap.textContent = "···"; cap.classList.add("pensando"); }
           if (ev.state === "listening") note.hidden = true;
           break;
         case "level": orb.style.setProperty("--lvl", Number(ev.value || 0).toFixed(3)); break;
         case "interim": capU.textContent = ev.text; break;
+        case "interrupt": uso.interrupciones++; break;
         case "partial": if (ev.text) { cap.classList.remove("pensando"); cap.textContent = ev.text; } break;
         case "turn":
           addTx(ev.role, ev.text);
           if (ev.role === "assistant") { cap.classList.remove("pensando"); cap.textContent = ev.text; } else capU.textContent = "";
+          if (ev.role === "assistant" && saliente && S.timbre) { pararTimbre(); conectoLaLinea(); }
           break;
         case "error":
+          if (sonando && !ev.fatal && ev.code !== "mic") break;   // el aviso de "no se escucha nada" no aplica mientras suena
+          if (ev.fatal) { pararTimbre(); yaAtendio(); }
+          if (!ev.message) { note.hidden = true; break; }
+          uso.avisos++;
           note.hidden = false; note.textContent = ev.message;
           // El motor de voz no pudo arrancar: ofrecemos seguir con el siguiente para no frenar la demo.
           if (ev.code === "voz_inicio" || ev.code === "vapi_inicio") {
@@ -395,15 +776,16 @@
             abrirTeclado(true);
           }
           break;
-        case "end": finishCall(e, turns, Math.round((Date.now() - started) / 1000), ev.reason); break;
+        case "end": finishCall(e, turns, Math.round((Date.now() - started) / 1000), ev.reason, { grabacion, grabadora }, { motor: provider, uso }); break;
       }
     }
 
-    const interrumpir = () => { if (engine.state === "speaking" || engine.state === "thinking") engine.interrupt(); };
+    const interrumpir = () => { if (engine.state === "speaking" || engine.state === "thinking") { if (engine.state === "speaking") uso.interrupciones++; engine.interrupt(); } };
     orb.addEventListener("click", interrumpir);
     orb.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); interrumpir(); } });
     micBtn.addEventListener("click", () => {
       muted = !muted; engine.setMuted(muted);
+      if (muted) uso.micSilenciado++;
       micBtn.replaceChildren(icon(muted ? "micOff" : "mic")); micBtn.classList.toggle("on", muted);
       micBtn.setAttribute("aria-pressed", String(muted));
       micBtn.setAttribute("aria-label", muted ? "Activar micrófono" : "Silenciar micrófono");
@@ -420,13 +802,62 @@
       showTx = !showTx; txList.hidden = !showTx;
       txBtn.classList.toggle("on", showTx); txBtn.setAttribute("aria-pressed", String(showTx));
     });
-    hang.addEventListener("click", () => engine.stop("user"));
+    hang.addEventListener("click", () => {
+      // Cortar mientras suena, antes de que arranque la voz: no hubo conversación.
+      if (!arranco) { pararTimbre(); S.engine = null; return go("brief", { id: e.id }); }
+      engine.stop("user");
+    });
 
     if (provider === "browser" && !sup.stt) { muted = true; micBtn.disabled = true; abrirTeclado(false); }
 
     clearInterval(S.timer);
     S.timer = setInterval(() => { timer.textContent = fmtDur((Date.now() - started) / 1000); }, 500);
-    engine.start({ system: T.prompts.voz(S.cfg, e, S.candidato), firstUserTurn: T.prompts.vozInicio(e), onEvent });
+    let arranco = false;
+    // Se graba desde que la llamada está atendida: mientras suena el teléfono (y la voz conecta por detrás), todavía no.
+    const arrancar = () => { arranco = true; if (!sonando) empezarAGrabar(); engine.start({ system: T.prompts.voz(S.cfg, e, S.candidato), firstUserTurn: T.prompts.vozInicio(e), onEvent }); };
+    pararTimbre();
+    if (!porTelefono) return arrancar();
+    const salidaElegida = provider === "gemini-live" && S.audio ? S.audio.salida : "";
+    // Se conectó la llamada: arranca a contar y, con la voz telefónica, suena el ruido de línea de fondo.
+    function conectoLaLinea() {
+      started = Date.now();
+      if (S.cfg.vozTelefonica !== false && !S.linea) {
+        S.linea = T.voice.linea(salidaElegida);
+        S.linea.hablando(engine.state === "speaking");
+      }
+    }
+    if (saliente) {
+      // Antes de marcar: a quién llamás y el botón Llamar. Recién ahí suena el tono de llamada.
+      orb.className = "orb big";
+      stateLbl.textContent = `${cName} · ${telefonoDe(e)}`;
+      atender.addEventListener("click", () => {
+        if (!sonando) return;
+        yaAtendio();
+        orb.className = "orb big connecting";
+        stateLbl.textContent = `Llamando a ${firstName(cName)}…`;
+        S.timbre = T.voice.tono("saliente", salidaElegida);
+        // Primero suena un tono entero; el cliente atiende (y se corta el tono) cuando empieza a hablar.
+        setTimeout(() => { if (S.engine === engine) arrancar(); }, 3500);
+      });
+      setTimeout(() => { if (sonando) atender.focus(); }, 0);
+      return;
+    }
+    S.timbre = T.voice.tono("entrante", salidaElegida);
+    orb.className = "orb big ringing";
+    stateLbl.textContent = `Llamada entrante · ${S.cfg.empresa || "cliente"}`;
+    atender.addEventListener("click", () => {
+      if (!sonando) return;
+      yaAtendio();
+      pararTimbre();
+      note.hidden = true;
+      conectoLaLinea();
+      empezarAGrabar();
+      if (!conectaMientrasSuena) return arrancar();
+      if (!muted) engine.setMuted(false);
+      onEvent({ type: "state", state: engine.state });
+    });
+    if (conectaMientrasSuena) { arrancar(); engine.setMuted(true); }
+    setTimeout(() => { if (sonando && !atender.disabled) atender.focus(); }, 0);
   };
 
   // Motores de voz que se pueden usar, en orden: primero el del .env (VOICE_PROVIDER),
@@ -443,17 +874,38 @@
     return motoresDeVoz()[0];
   }
 
+  function pararTimbre() {
+    if (S.timbre) { S.timbre.parar(); S.timbre = null; }
+  }
+  function pararLinea() {
+    if (S.linea) { S.linea.parar(); S.linea = null; }
+  }
+  // Un número de celular inventado pero fijo para cada escenario, para la pantalla de "Llamar".
+  function telefonoDe(e) {
+    let n = 0;
+    for (const c of String(e.id || e.titulo || "")) n = (n * 31 + c.charCodeAt(0)) >>> 0;
+    const d = String(n % 1e7).padStart(7, "0");
+    return `11 6${d.slice(0, 3)}-${d.slice(3)}`;
+  }
+
   function endCallSilently() {
+    pararTimbre(); pararLinea();
     clearInterval(S.timer);
     if (S.engine) { const en = S.engine; S.engine = null; try { en.stop("user"); } catch (_) {} }
   }
 
-  function finishCall(e, turns, seconds, reason) {
+  // audio: { grabacion, grabadora } de la llamada. La aceptación (o el no) viaja con la llamada para quedar en el
+  // informe; la grabación es una promesa, porque la grabadora tarda un instante en entregar el archivo.
+  // registro: { motor, uso } de la llamada, para los datos de la llamada del informe.
+  function finishCall(e, turns, seconds, reason, audio, registro) {
+    pararTimbre(); pararLinea();
     clearInterval(S.timer);
     S.engine = null;
     const userTurns = turns.filter(t => t.role === "user").length;
-    S.lastCall = { escenario: e, turns: turns.slice(), seconds, reason };
-    if (userTurns < 2) return go("corta", { id: e.id });
+    const { grabacion = null, grabadora = null } = audio || {};
+    S.lastCall = { escenario: e, turns: turns.slice(), seconds, reason, simulacion: S.simulacion, grabacion, audio: grabadora ? grabadora.terminar() : null };
+    if (registro) S.lastCall.metricas = T.core.metricasDeLlamada({ turnos: turns, motivo: reason, motor: registro.motor, uso: registro.uso });
+    if (userTurns < 2) { S.lastCall.audio = null; return go("corta", { id: e.id }); }   // sin informe no se guarda ninguna grabación
     go("evaluating");
   }
 
@@ -489,7 +941,7 @@
       let report = call.pendingReport;
       if (!report) {
         const text = await T.api.claude({
-          purpose: "eval", maxTokens: 2500,
+          purpose: "eval", maxTokens: 2500, simulacion: call.simulacion,
           onStatus: msg => { if (vigente()) { const st = box.querySelector(".sub"); if (st) st.textContent = msg; } },
           system: "Sos un evaluador riguroso y justo. Respondés solo con un objeto JSON válido, sin texto alrededor.",
           messages: [{ role: "user", content: T.prompts.evaluacion(cfg, e, call.turns, S.candidato, Math.max(1, Math.round(call.seconds / 60))) }]
@@ -500,11 +952,15 @@
         report = {
           candidato: S.candidato, fecha: new Date().toISOString(), duracionSeg: call.seconds,
           empresa: cfg.empresa, responsable: T.core.responsableTexto(cfg),
-          escenario: { titulo: e.titulo, resumen: e.resumen, cliente: e.cliente, objetivo: e.objetivo },
+          escenario: { id: e.id, titulo: e.titulo, resumen: e.resumen, cliente: e.cliente, objetivo: e.objetivo },
           criteriosDef: clone(cfg.criterios), evaluacion: ev,
           puntaje: p.puntaje, criteriosPuntuados: p.cubiertos,
           transcripcion: call.turns
         };
+        // Si se le ofreció grabar, queda en el informe lo que leyó y lo que respondió (sí o no).
+        if (call.grabacion) report.consentimientoAudio = call.grabacion;
+        // Datos de la llamada (turnos, palabras, ayudas usadas): los ve la empresa en el informe. No cambian el puntaje.
+        if (call.metricas) report.metricas = call.metricas;
         call.pendingReport = report;
       }
       try {
@@ -515,11 +971,16 @@
       } catch (err) {
         throw new Error("La valoración está lista, pero no se pudo guardar en Empresa → Informes. Reintentá para guardarla sin volver a evaluar. " + T.api.errorCopy(err));
       }
+      // El audio se sube después y aparte: si no se puede, el informe ya quedó guardado y se ve igual, sin audio.
+      if (call.audio && vigente()) { const st = box.querySelector(".sub"); if (st) st.textContent = "Guardando el audio de la llamada…"; }
+      const avisoDelAudio = await subirAudioDe(call, report);
       const resumen = { id: report.id, candidato: report.candidato, escenario: report.escenario.titulo, empresa: report.empresa, fecha: report.fecha, puntaje: report.puntaje };
       S.informes = [resumen, ...S.informes.filter(r => r.id !== report.id)];
+      S.listaInformes.huella = null;   // hay un informe nuevo: la lista filtrada se vuelve a pedir
       S.report = report; S.lastCall = null;
       if (!vigente()) { toast("El informe quedó listo en “Mis informes”."); return; }
       go("report", { id: report.id });
+      if (avisoDelAudio) toast(avisoDelAudio, 6000);
     } catch (err) {
       if (!vigente()) return;
       box.replaceChildren(
@@ -529,6 +990,26 @@
         h("div", { class: "r-actions", style: "justify-content:center" },
           h("button", { class: "btn", onclick: () => go("evaluating") }, "Reintentar"),
           h("button", { class: "btn-o", onclick: () => go("sims") }, "Volver")));
+    }
+  }
+
+  // Sube la grabación de la llamada al informe ya guardado y anota en `report.audio` lo que respondió el servidor.
+  // Devuelve "" si salió bien o no había nada que subir, o el aviso para mostrar si no se pudo.
+  async function subirAudioDe(call, report) {
+    if (!call.audio || report.audio) return "";
+    const grabado = await Promise.resolve(call.audio).catch(() => null);
+    call.audio = null;   // la grabación no queda guardada en el navegador
+    if (!grabado) return "";
+    for (let intento = 1; ; intento++) {
+      try {
+        report.audio = (await T.api.informes.subirAudio(report.id, grabado.blob, grabado.duracionSeg)).audio;
+        return "";
+      } catch (err) {
+        // Un rechazo del servidor (permiso, tamaño, formato) no cambia por reintentar; un corte de conexión, quizás sí.
+        const definitivo = err && err.status && err.status < 500;
+        if (definitivo || intento === 2) return "El informe quedó guardado, pero no se pudo guardar el audio: " + T.api.errorCopy(err);
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
   }
 
@@ -561,7 +1042,10 @@
     if (S.profile === "empresa" && r.id) actions.append(h("button", { class: "btn-o btn-danger", onclick: async () => {
       if (!confirm("¿Eliminar este informe?")) return;
       try { await T.api.informes.remove(r.id); } catch (err) { return toast("No se pudo eliminar: " + T.api.errorCopy(err)); }
-      S.informes = await T.api.informes.list().catch(() => S.informes); go("informes"); toast("Informe eliminado.");
+      // Se saca de lo guardado para que no aparezca al volver; la lista se actualiza sola al abrirse.
+      S.informes = S.informes.filter(x => x.id !== r.id);
+      S.listaInformes.items = S.listaInformes.items.filter(x => x.id !== r.id);
+      go("informes"); toast("Informe eliminado.");
     } }, icon("trash"), "Eliminar"));
     col.append(actions);
 
@@ -573,9 +1057,60 @@
       ring(r.puntaje)));
     if (ev.resumen) col.append(h("p", { class: "r-summary", text: ev.resumen }));
 
+    // Audio de la llamada (si el candidato aceptó que se grabe): junto a cada cita que se pueda ubicar en la
+    // conversación va un botón para escuchar ese momento. El audio se baja recién con el primer clic.
+    const conAudio = Boolean(r.id && r.audio && r.audio.bytes && T.audio.sePuedeEscuchar());
+    const reproductor = conAudio ? T.audio.crearReproductor(() => T.api.informes.audio(r.id)) : null;
+    if (reproductor) S.alSalirDeVista = () => reproductor.cerrar();
+    let citasConAudio = 0;
+    // `palabras` son los elementos de cada palabra de la cita: se van iluminando a medida que suena.
+    function botonEscuchar(tramo, palabras) {
+      citasConAudio++;
+      let tiempos = [], cuadro = 0;
+      const iluminar = () => {
+        const ahora = reproductor.segundo();
+        palabras.forEach((palabra, i) => palabra.classList.toggle("dicha", ahora != null && ahora >= tiempos[i]));
+        cuadro = ahora == null ? 0 : requestAnimationFrame(iluminar);
+      };
+      const boton = h("button", { class: "escuchar no-print", type: "button", title: "Escuchar este momento de la llamada", "aria-label": "Escuchar este momento de la llamada", "aria-pressed": "false" }, icon("play"));
+      const mostrar = sonando => {
+        if (!sonando) { cancelAnimationFrame(cuadro); cuadro = 0; palabras.forEach(palabra => palabra.classList.remove("dicha")); }
+        boton.replaceChildren(icon(sonando ? "stop" : "play"));
+        boton.classList.toggle("on", sonando);
+        boton.setAttribute("aria-pressed", String(sonando));
+      };
+      boton.addEventListener("click", async () => {
+        if (boton.classList.contains("on")) return reproductor.parar();
+        mostrar(true);
+        try {
+          // El turno puede ser largo y tener silencios: con el volumen de la grabación se busca la parte
+          // donde está la cita (una estimación; el reproductor le suma un margen).
+          const paso = T.core.PASO_VOLUMEN_SEG;
+          const niveles = await reproductor.volumen(tramo.t0, tramo.t1, paso);
+          const cita = T.core.tramoDeCita(niveles, paso, tramo);
+          const deLaCita = niveles.slice(Math.round((cita.t0 - tramo.t0) / paso), Math.round((cita.t1 - tramo.t0) / paso));
+          tiempos = T.core.tiemposDePalabras(deLaCita, paso, cita.t0, palabras.map(palabra => palabra.textContent).join(" "));
+          await reproductor.tocar(cita.t0, cita.t1, () => mostrar(false));
+          if (boton.classList.contains("on") && tiempos.length === palabras.length) iluminar();
+        }
+        catch (err) { mostrar(false); toast("No se pudo escuchar el audio: " + T.api.errorCopy(err), 5000); }
+      });
+      return boton;
+    }
+
     const defs = r.criteriosDef || [];
     const list = h("div", { class: "crit-list" });
     let sinPuntuar = 0;
+    // La cita de un criterio. Si hay audio y está en un turno hablado del candidato, lleva el botón para
+    // escucharla y va palabra por palabra, para iluminarlas mientras suena; si no, es solo el texto.
+    const evidenciaDe = cita => {
+      if (!cita) return ["Sin evidencia en la conversación."];
+      const texto = String(cita).replace(/^["“]+|["”]+$/g, "");
+      const tramo = conAudio ? T.core.ubicarCita(r.transcripcion, cita) : null;
+      if (!tramo) return [`“${texto}”`];
+      const palabras = texto.split(/\s+/).filter(Boolean).map(palabra => h("span", { class: "palabra", text: palabra }));
+      return [botonEscuchar(tramo, palabras), "“", ...palabras.flatMap((palabra, i) => (i ? [" ", palabra] : [palabra])), "”"];
+    };
     defs.forEach((c, i) => {
       const x = T.core.buscarCriterio({ nombre: c.nombre, total: defs.length }, i, ev.criterios || []) || {};
       const p = T.core.puntajeCriterio(x.puntaje);
@@ -586,9 +1121,14 @@
       list.append(h("div", { class: "crit" },
         h("div", { class: "nm" }, c.nombre, h("small", { text: `peso ${c.peso}` })), bars,
         x.comentario ? h("p", { class: "cm", text: x.comentario }) : null,
-        h("p", { class: "ev", text: x.evidencia ? `“${String(x.evidencia).replace(/^["“]+|["”]+$/g, "")}”` : "Sin evidencia en la conversación." })));
+        x.paraSubir ? h("p", { class: "cm", text: "Para subir: " + x.paraSubir }) : null,
+        h("p", { class: "ev" }, ...evidenciaDe(x.evidencia))));
     });
-    col.append(h("div", null, h("div", { class: "eyebrow", text: "Criterios de la empresa", style: "margin-bottom:8px" }), list));
+    const diasDeAudio = (S.server && S.server.audio && S.server.audio.dias) || 90;
+    const sobreElAudio = citasConAudio ? "Tocá el botón junto a una cita para escuchar ese momento de la llamada."
+      : r.audio && r.audio.borrado ? `El audio de esta simulación ya se borró: se guarda ${diasDeAudio} días.` : "";
+    col.append(h("div", null, h("div", { class: "eyebrow", text: "Criterios de la empresa", style: "margin-bottom:8px" }),
+      sobreElAudio ? h("p", { class: "r-audio no-print", text: sobreElAudio }) : null, list));
     if (sinPuntuar) col.append(h("div", { class: "notice", text: `La IA no puntuó ${sinPuntuar} de ${defs.length} criterios: el puntaje se calculó solo con los que sí evaluó. Tomalo con pinzas.` }));
 
     const ul = arr => h("ul", null, (arr || []).map(t => h("li", { text: t })));
@@ -600,6 +1140,12 @@
       h("div", { class: "box" }, h("h3", { text: "Cómo se expresó" }), h("p", { text: ev.expresion || "—" }))));
     if (ev.preguntas_entrevista && ev.preguntas_entrevista.length)
       col.append(h("div", { class: "box" }, h("h3", { text: "Preguntas sugeridas para la entrevista" }), ul(ev.preguntas_entrevista)));
+
+    // Datos de la llamada: solo para la empresa. Los informes anteriores no los tienen.
+    const datosDeLaLlamada = S.usuario && S.usuario.rol === "empresa" ? T.core.describirMetricas(r.metricas, NOMBRE_MOTOR) : [];
+    if (datosDeLaLlamada.length)
+      col.append(h("div", { class: "box", id: "datosLlamada" }, h("h3", { text: "Datos de la llamada" }), ul(datosDeLaLlamada),
+        h("p", { class: "nota-datos", text: "Los calcula la app con lo que pasó en la llamada. No forman parte del puntaje." })));
 
     const tx = h("div", { class: "transcript" });
     (r.transcripcion || []).forEach(t => tx.append(h("div", { class: "ln " + (t.role === "user" ? "u" : "c") }, h("b", { text: t.role === "user" ? firstName(r.candidato) : clientName(r.escenario) }), t.text)));
@@ -642,7 +1188,7 @@
       actions().forEach(a => cards.append(h("button", { class: "card", onclick: () => startAction(a) }, icon(a.icon), h("b", { text: a.title }), h("span", { text: a.desc }))));
       col.append(h("div", { class: "hero compact" },
         h("div", { class: "orb", "aria-hidden": "true" }),
-        h("p", { class: "hello", text: `Hola, ${firstName(JUNIOR.name)}` }),
+        h("p", { class: "hello", text: `Hola, ${firstName(S.usuario.nombre)}` }),
         h("h1", { class: "ask", text: "¿En qué te ayudo hoy?" }),
         h("p", { class: "sub", text: `Conozco cómo trabaja ${S.cfg.empresa}. Te explico cómo se hace cada cosa y por qué importa para el negocio.` }),
         cards));
@@ -751,7 +1297,7 @@
     jCtl = new AbortController();
     const cid = c.id;
     try {
-      const sys = T.prompts.juniorPartes(S.cfg, c.action, firstName(JUNIOR.name));
+      const sys = T.prompts.juniorPartes(S.cfg, c.action, firstName(S.usuario.nombre));
       reply.content = await T.api.claude({
         purpose: "chat", maxTokens: 1600, signal: jCtl.signal,
         system: sys.estable + sys.variable, systemEstable: sys.estable.length,
@@ -933,7 +1479,10 @@
 
   VIEWS.escenarios = view => {
     const col = h("div", { class: "wide cfg" });
-    col.append(cfgHead("Escenarios de simulación", "Las situaciones que practican los candidatos. La IA interpreta al cliente con estos datos."));
+    col.append(cfgHead("Escenarios de simulación", "Las situaciones que practican los candidatos. La IA interpreta al cliente (o al líder que da una tarea) con estos datos."));
+    col.append(h("label", { class: "chk" },
+      h("input", { type: "checkbox", id: "vozTelefonica", checked: S.cfg.vozTelefonica !== false, onchange: ev => { S.cfg.vozTelefonica = ev.target.checked; markDirty(); } }),
+      h("span", null, h("b", { text: "Voz telefónica" }), " · en las llamadas, la voz del cliente suena como por teléfono, no tan limpia (solo con Gemini Live). Si en la sala no se entiende bien, apagala.")));
     const open = S.params.open;
     S.cfg.escenarios.forEach((e, i) => {
       const isOpen = open === e.id;
@@ -949,13 +1498,18 @@
           field("Título", null, tin("titulo")),
           field("Resumen", "Lo que ve el candidato antes de empezar.", tin("resumen")),
           h("div", { class: "grid2" },
-            field("Cliente", "Nombre y quién es.", tin("cliente")),
+            field("Con quién habla", "Un cliente, o su líder que le asigna una tarea paso a paso.", h("select", { onchange: ev => { e.rol = ev.target.value; markDirty(); } },
+              [["cliente", "Un cliente"], ["lider", "Su líder (le da una tarea)"]].map(([v, t]) => h("option", { value: v, text: t, selected: (e.rol || "cliente") === v })))),
+            field("Persona", "Nombre y quién es.", tin("cliente")),
             field("Modalidad", null, h("select", { onchange: ev => { e.modalidad = ev.target.value; markDirty(); } },
               [["llamada", "Llamada telefónica"], ["presencial", "En persona"]].map(([v, t]) => h("option", { value: v, text: t, selected: (e.modalidad || "llamada") === v }))))),
           field("Personalidad", "Cómo habla y cómo reacciona.", tx("personalidad")),
           field("Situación", "Incluí los datos que solo da si le preguntan.", tx("situacion")),
           field("Objetivo del candidato", null, tx("objetivo")),
+          field("Lo que tiene a mano el candidato", "Lo que vería en el sistema y las reglas que conoce (qué puede ofrecer, plazos, cómo validar). Una línea por dato, con \"Título: texto\". Se muestra antes de la llamada; no pongas lo que el cliente tiene que contar.", tx("ficha")),
           h("div", { class: "grid2" }, field("Duración (min)", null, dur), field("Dificultad", null, dif)),
+          field("Quién arranca la llamada", "En un call center, en las llamadas entrantes saluda primero quien atiende.", h("select", { onchange: ev => { if (ev.target.value) e.inicio = ev.target.value; else delete e.inicio; markDirty(); } },
+            [["", "El cliente habla primero"], ["atiende", "El candidato atiende y saluda (llamada entrante)"], ["llama", "El candidato llama (llamada saliente)"]].map(([v, t]) => h("option", { value: v, text: t, selected: (e.inicio || "") === v })))),
           field("Voz del cliente (Gemini Live y Vapi)", "Automática: se elige por el nombre.", h("select", { onchange: ev => { e.voz = ev.target.value; markDirty(); } },
             [["", "Automática"], ["femenina", "Femenina"], ["masculina", "Masculina"]].map(([v, t]) => h("option", { value: v, text: t, selected: (e.voz || "") === v })))),
           h("div", null, h("button", { class: "btn-o btn-danger", onclick: () => { if (confirm(`¿Eliminar "${e.titulo}"?`)) { S.cfg.escenarios.splice(i, 1); markDirty(); render(); } } }, icon("trash"), "Eliminar escenario"))));
@@ -991,32 +1545,158 @@
   VIEWS.informes = view => {
     const col = h("div", { class: "wide cfg" });
     col.append(h("div", { class: "cfg-head" }, h("div", null, h("h1", { text: "Informes de candidatos" }), h("p", { text: "Resultados de las simulaciones. La decisión siempre la toma una persona." }))));
-    const lista = h("div");
-    const mostrar = () => {
-      const deEsta = S.informes.filter(r => !r.empresa || r.empresa === S.cfg.empresa);
-      lista.replaceChildren(deEsta.length ? reportList(deEsta, true) : h("p", { class: "muted", text: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
-    };
-    mostrar();
-    col.append(lista);
+    // Solo los informes de la empresa cargada: ese filtro lo aplica el servidor, junto con los que elige la persona.
+    col.append(...listaDeInformes({ clave: "informes", fijo: { empresa: S.cfg.empresa }, conCandidato: true, exportable: true,
+      sinNada: "Todavía no hay informes. Aparecen acá cuando un candidato termina una simulación." }));
     view.append(col);
-    T.api.informes.list().then(informes => {
-      if (!lista.isConnected) return;
-      S.informes = informes;
-      mostrar();
-    }).catch(err => { if (lista.isConnected) toast("No se pudieron actualizar los informes: " + T.api.errorCopy(err)); });
+  };
+
+  // ------------------------------------------------------------------
+  // Ingreso y cuenta
+  // ------------------------------------------------------------------
+  const MIN_CLAVE = 8;
+  const logo = () => h("div", { class: "logo" }, h("img", { class: "mark", src: "img/logo.png", alt: "" }), "Tutoring");
+  const errorForm = texto => h("p", { class: "form-err", role: "alert", text: texto || "", hidden: !texto });
+  const campoClave = (id, autocomplete) => h("input", { id, type: "password", autocomplete, required: true, minlength: id === "claveActual" ? null : MIN_CLAVE });
+
+  // Script oficial de Google Identity Services: se carga solo en la pantalla de ingreso y una sola vez.
+  let cargandoGoogle = null;
+  function cargarGoogle() {
+    if (window.google && google.accounts && google.accounts.id) return Promise.resolve();
+    if (!cargandoGoogle) cargandoGoogle = new Promise((ok, mal) => {
+      const s = document.createElement("script");
+      s.src = "https://accounts.google.com/gsi/client";
+      s.async = true;
+      s.onload = ok;
+      s.onerror = () => { cargandoGoogle = null; mal(new Error("No se pudo cargar el botón de Google.")); };
+      document.head.append(s);
+    });
+    return cargandoGoogle;
+  }
+
+  // Botón "Acceder con Google". Si el servidor no tiene el ingreso con Google configurado, no aparece.
+  // Google le da al navegador un ID token; lo mandamos al servidor, que lo verifica y decide si entra.
+  async function botonGoogle(zona, err) {
+    try {
+      const c = await T.api.auth.config();
+      if (!c.google || !zona.isConnected) return;
+      await cargarGoogle();
+      if (!zona.isConnected) return;
+      google.accounts.id.initialize({
+        client_id: c.google.clientId,
+        ux_mode: "popup",
+        auto_select: false,
+        callback: async r => {
+          err.hidden = true;
+          try { await T.api.auth.google(r.credential); await entrar(); }
+          catch (e) { err.textContent = T.api.errorCopy(e); err.hidden = false; }
+        }
+      });
+      google.accounts.id.renderButton(zona.querySelector(".google-boton"), { theme: "outline", size: "large", text: "signin_with", shape: "rectangular", locale: "es", width: 320 });
+      zona.hidden = false;
+    } catch (e) {
+      console.warn("[ingreso] sin botón de Google:", e.message);
+    }
+  }
+
+  VIEWS.login = view => {
+    const usuario = h("input", { id: "loginUsuario", type: "text", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true });
+    const clave = campoClave("loginClave", "current-password");
+    const err = errorForm(S.params.aviso);
+    const btn = h("button", { id: "loginEntrar", class: "btn lg", type: "submit", text: "Ingresar" });
+    const zonaGoogle = h("div", { class: "google-zona", hidden: true },
+      h("p", { class: "google-sep muted", text: "o, si una empresa te invitó" }),
+      h("div", { class: "google-boton" }));
+    view.append(h("form", { class: "auth-card", novalidate: true, onsubmit: async ev => {
+      ev.preventDefault();
+      if (!usuario.value.trim() || !clave.value) { err.textContent = "Completá tu usuario y tu contraseña."; err.hidden = false; return; }
+      btn.disabled = true; err.hidden = true;
+      try { await T.api.auth.ingresar(usuario.value.trim(), clave.value); await entrar(); }
+      catch (e) { err.textContent = T.api.errorCopy(e); err.hidden = false; clave.value = ""; clave.focus(); }
+      finally { btn.disabled = false; }
+    } },
+      logo(),
+      h("h1", { text: "Ingresá a tu cuenta" }),
+      field("Usuario", null, usuario),
+      field("Contraseña", "La primera vez, usá el código que te dieron.", clave),
+      err, btn, zonaGoogle));
+    botonGoogle(zonaGoogle, err);
+    requestAnimationFrame(() => usuario.focus());
+  };
+
+  // Formulario de contraseña nueva: lo usan el primer ingreso y "Tu cuenta".
+  function formClave({ pedirActual, alGuardar }) {
+    const actual = pedirActual ? campoClave("claveActual", "current-password") : null;
+    const nueva = campoClave("claveNueva", "new-password");
+    const repetir = campoClave("claveRepetir", "new-password");
+    const err = errorForm(), ok = h("p", { class: "form-ok", role: "status", hidden: true });
+    const btn = h("button", { id: "claveGuardar", class: "btn lg", type: "submit", text: "Guardar contraseña" });
+    const form = h("form", { class: "auth-form", novalidate: true, onsubmit: async ev => {
+      ev.preventDefault();
+      err.hidden = true; ok.hidden = true;
+      const fallo = nueva.value.length < MIN_CLAVE ? `La contraseña nueva tiene que tener al menos ${MIN_CLAVE} caracteres.`
+        : nueva.value !== repetir.value ? "Las dos contraseñas no coinciden." : "";
+      if (fallo) { err.textContent = fallo; err.hidden = false; return; }
+      btn.disabled = true;
+      try {
+        await T.api.auth.cambiarClave({ actual: actual ? actual.value : undefined, nueva: nueva.value });
+        form.reset();
+        await alGuardar(ok);
+      } catch (e) { err.textContent = T.api.errorCopy(e); err.hidden = false; }
+      finally { btn.disabled = false; }
+    } },
+      actual ? field("Contraseña actual", null, actual) : null,
+      field("Contraseña nueva", `Mínimo ${MIN_CLAVE} caracteres.`, nueva),
+      field("Repetila", null, repetir),
+      err, ok, btn);
+    return form;
+  }
+
+  VIEWS.nuevaClave = view => {
+    view.append(h("div", { class: "auth-card" },
+      logo(),
+      h("h1", { text: "Creá tu contraseña" }),
+      h("p", { class: "muted", text: `Hola, ${firstName(S.usuario.nombre)}. El código que usaste sirve una sola vez: elegí una contraseña que solo sepas vos.` }),
+      formClave({ pedirActual: false, alGuardar: () => entrar() }),
+      h("button", { class: "btn-o", type: "button", onclick: salir }, "Salir")));
+    requestAnimationFrame(() => $("claveNueva").focus());
+  };
+
+  VIEWS.cuenta = view => {
+    view.append(h("div", { class: "col" },
+      h("h1", { class: "ask", text: "Cambiar contraseña" }),
+      h("p", { class: "muted", text: `${S.usuario.nombre} · usuario ${S.usuario.usuario}. Al cambiarla se cierran tus otras sesiones abiertas.` }),
+      formClave({ pedirActual: true, alGuardar: ok => { ok.textContent = "Listo: tu contraseña cambió."; ok.hidden = false; } })));
   };
 
   // ------------------------------------------------------------------
   // Arranque
   // ------------------------------------------------------------------
-  document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => setProfile(b.dataset.profile)));
-  $("status").addEventListener("click", diagnosticar);
+  $("status").addEventListener("click", () => { if (S.usuario && S.usuario.rol === "empresa") diagnosticar(); });
+  T.api.onSinSesion(() => {
+    if (!S.usuario) return;
+    S.usuario = null; S.dirty = false;
+    go("login", { aviso: "Tu sesión venció. Volvé a ingresar." });
+  });
+  function cerrarMenuCuenta() { $("meMenu").hidden = true; $("me").setAttribute("aria-expanded", "false"); }
+  $("me").addEventListener("click", () => {
+    const abrir = $("meMenu").hidden;
+    $("meMenu").hidden = !abrir;
+    $("me").setAttribute("aria-expanded", String(abrir));
+  });
+  $("cuenta").addEventListener("click", () => go("cuenta"));
+  $("salir").addEventListener("click", salir);
+  document.addEventListener("click", ev => { if (!ev.target.closest(".me-wrap")) cerrarMenuCuenta(); });
   T.api.onProvider(data => { S.usandoRespaldo = true; if (S.server) { S.server.providerName = data.name; renderTop(); } });
   $("menu").addEventListener("click", () => {
     const abierto = $("side").classList.toggle("open");
     $("menu").setAttribute("aria-expanded", String(abierto));
   });
-  document.addEventListener("keydown", ev => { if (ev.key === "Escape" && $("side").classList.contains("open")) cerrarMenu(); });
+  document.addEventListener("keydown", ev => {
+    if (ev.key !== "Escape") return;
+    if (!$("meMenu").hidden) { cerrarMenuCuenta(); $("me").focus(); }
+    else if ($("side").classList.contains("open")) cerrarMenu();
+  });
   window.addEventListener("beforeunload", ev => {
     if (S.dirty || S.view === "call") { ev.preventDefault(); ev.returnValue = ""; }
   });
@@ -1027,6 +1707,40 @@
         "Esta app se abre desde el servidor: en la carpeta del proyecto ejecutá ", h("b", { text: "npm start" }), " y entrá a ", h("b", { text: "http://localhost:3000" }), "."));
       return;
     }
+    try { await entrar(); }
+    catch (e) { go("login", e.status === 401 ? {} : { aviso: T.api.errorCopy(e) }); }
+  }
+
+  // Escenarios que se cargaron de un ejemplo antes de que existiera "Lo que tenés a mano" (`ficha`):
+  // se completa con el texto del ejemplo, solo si el campo no existe. Si la empresa lo vació, queda vacío.
+  function completarDesdeEjemplos(cfg) {
+    const ejemplos = {};
+    Object.values(T.EJEMPLOS || {}).forEach(ej => (ej.config.escenarios || []).forEach(e => { ejemplos[e.id] = e; }));
+    (cfg.escenarios || []).forEach(e => {
+      const ej = ejemplos[e.id];
+      if (ej && ej.ficha && !("ficha" in e)) e.ficha = ej.ficha;
+    });
+  }
+
+  // Con la sesión ya abierta: datos del usuario, configuración, informes y su pantalla de inicio.
+  // Al entrar o salir de una cuenta no queda nada de los informes ni de los filtros de la persona anterior.
+  function olvidarInformes() {
+    S.informes = [];
+    S.filtros = { misinformes: filtrosVacios(), informes: filtrosVacios() };
+    S.listaInformes = { huella: null, items: [] };
+  }
+
+  async function entrar() {
+    S.usuario = await T.api.auth.yo();
+    if (S.usuario.debeCambiar) return go("nuevaClave");
+    $("cuenta").hidden = S.usuario.metodo === "google";
+    S.profile = S.usuario.rol;
+    S.candidato = S.usuario.nombre;
+    S.voiceName = store.get(k("voice"), "");
+    S.audio = Object.assign({ entrada: "", salida: "" }, store.get(k("audio"), {}));
+    J = store.get(k("junior"), { chats: [], current: null });
+    S.report = null; S.dirty = false;
+    olvidarInformes();
     let errorConfig = null;
     try { S.server = await T.api.config(); }
     catch (e) { errorConfig = e; S.server = { hasKey: false, models: {}, ia: {}, voice: { provider: "browser" } }; }
@@ -1039,9 +1753,21 @@
     // Convierte el formato viejo (si hiciera falta) y completa lo que falte.
     S.cfg = T.core.migrarConfig(S.cfg) || T.core.normalizarConfig(clone(T.DEFAULTS));
     if (!S.cfg.empresa) S.cfg.empresa = T.DEFAULTS.empresa;
-    try { S.informes = await T.api.informes.list(); } catch (_) { S.informes = []; }
-    render();
+    completarDesdeEjemplos(S.cfg);
+    // Los últimos informes se ven en el inicio del candidato. Los otros perfiles no los usan ahí:
+    // la empresa pide su lista (con filtros) al abrir Informes.
+    if (S.profile === "estudiante") { try { S.informes = await T.api.informes.list(); } catch (_) {} }
+    go(INICIO[S.profile] || "sims");
     if (errorConfig) toast(T.api.errorCopy(errorConfig));
+  }
+
+  async function salir() {
+    if (S.dirty && !confirm("Hay cambios sin guardar en la configuración. ¿Salir igual?")) return;
+    try { await T.api.auth.salir(); } catch (_) {}
+    S.usuario = null; S.cfg = null; S.report = null; S.dirty = false;
+    olvidarInformes();
+    J = { chats: [], current: null };
+    go("login");
   }
   boot();
 })();

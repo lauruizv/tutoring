@@ -2,7 +2,15 @@
 window.T = window.T || {};
 
 T.api = (function () {
-  async function jsonReq(url, opts = {}) {
+  // El servidor responde 401 con type "sin_ingreso" cuando no hay sesión o venció.
+  // (Un 401 de otro tipo es del proveedor de IA, por ejemplo la sesión de Claude Code.)
+  let onSinSesion = null;
+  const sinIngreso = (status, type) => status === 401 && type === "sin_ingreso";
+  function avisarSinSesion() { if (onSinSesion) onSinSesion(); }
+
+  // Pedido al servidor con los errores de siempre: sin conexión, o una respuesta de error con su mensaje.
+  // Si salió bien devuelve la respuesta, y quien llama decide cómo leerla (JSON o un archivo).
+  async function pedido(url, opts = {}) {
     let res;
     try {
       res = await fetch(url, { headers: { "content-type": "application/json" }, ...opts });
@@ -10,16 +18,41 @@ T.api = (function () {
       const err = new Error("No se pudo conectar con el servidor. ¿Sigue corriendo npm start?");
       err.offline = true; throw err;
     }
+    if (res.ok) return res;
     let cuerpo = null;
     try { cuerpo = await res.json(); } catch (_) {}
-    if (!res.ok) {
-      const msg = (cuerpo && cuerpo.error && cuerpo.error.message) || "HTTP " + res.status;
-      const e = new Error(msg);
-      e.status = res.status;
-      e.type = (cuerpo && cuerpo.error && cuerpo.error.type) || "";
-      throw e;
-    }
-    return cuerpo;
+    const msg = (cuerpo && cuerpo.error && cuerpo.error.message) || "HTTP " + res.status;
+    const e = new Error(msg);
+    e.status = res.status;
+    e.type = (cuerpo && cuerpo.error && cuerpo.error.type) || "";
+    // /api/yo es la pregunta del arranque: ahí el 401 es lo normal, no "tu sesión venció".
+    if (sinIngreso(e.status, e.type) && url !== "/api/yo") avisarSinSesion();
+    throw e;
+  }
+
+  async function jsonReq(url, opts) {
+    const res = await pedido(url, opts);
+    try { return await res.json(); } catch (_) { return null; }
+  }
+
+  // Baja un archivo que genera el servidor. Devuelve { blob, nombre, cantidad (de informes que lleva) }.
+  async function descargar(url) {
+    const res = await pedido(url);
+    const nombre = (/filename="([^"]+)"/.exec(res.headers.get("content-disposition") || "") || [])[1] || "descarga";
+    return { blob: await res.blob(), nombre, cantidad: Number(res.headers.get("x-informes")) || 0 };
+  }
+
+  // La zona horaria de este navegador ("America/Argentina/Buenos_Aires"): los archivos exportados llevan las fechas en esa hora.
+  function zonaHoraria() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (_) { return ""; }
+  }
+
+  // "?a=1&b=2" a partir de un objeto, salteando lo vacío ("" si no queda nada).
+  function consulta(campos) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(campos || {})) if (v != null && v !== "") q.set(k, v);
+    const texto = q.toString();
+    return texto ? "?" + texto : "";
   }
 
   // Llama al modelo de IA (el proveedor lo elige el servidor según el .env) con streaming.
@@ -27,7 +60,7 @@ T.api = (function () {
   // onStatus(texto): avisos mientras espera, por ejemplo "Reintentando…".
   // systemEstable (opcional): cuántos caracteres del principio de `system` no cambian entre consultas.
   // El servidor lo usa para el caché de prompts; el texto que recibe el modelo es el mismo.
-  async function claude({ purpose = "chat", system, systemEstable, messages, maxTokens = 1024, onText, onStatus, signal }) {
+  async function claude({ purpose = "chat", system, systemEstable, messages, maxTokens = 1024, onText, onStatus, signal, simulacion }) {
     const historial = T.core.normalizarHistorial(messages, 40);
     if (!historial.length) throw Object.assign(new Error("No hay nada para enviar."), { status: 400 });
 
@@ -37,7 +70,7 @@ T.api = (function () {
         method: "POST",
         signal,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ purpose, system, system_estable: systemEstable, messages: historial, max_tokens: maxTokens, stream: true })
+        body: JSON.stringify({ purpose, system, system_estable: systemEstable, messages: historial, max_tokens: maxTokens, stream: true, simulacion })
       });
     } catch (e) {
       if (e && e.name === "AbortError") throw e;
@@ -48,7 +81,9 @@ T.api = (function () {
       let msg = "", type = "";
       try { const j = await res.json(); msg = (j.error && j.error.message) || ""; type = (j.error && j.error.type) || ""; } catch (_) {}
       const err = new Error(msg || res.statusText || "Error de la API");
-      err.status = res.status; err.type = type; throw err;
+      err.status = res.status; err.type = type;
+      if (sinIngreso(err.status, err.type)) avisarSinSesion();
+      throw err;
     }
     if (!res.body) throw Object.assign(new Error("El servidor no devolvió contenido."), { status: 502 });
 
@@ -99,6 +134,7 @@ T.api = (function () {
     if (!e) return "Algo falló. Probá de nuevo.";
     if (e.name === "AbortError") return "";
     if (e.offline) return "No se pudo conectar con el servidor. ¿Sigue corriendo npm start?";
+    if (e.type === "sin_ingreso") return e.message;
     if (e.type === "missing_key") return e.message || `Falta la API key: pegala en el archivo .env (${keyVar}) y reiniciá el servidor.`;
     if (e.type === "sesion") return e.message;
     if (e.type === "limite_plan") return e.message;
@@ -121,6 +157,16 @@ T.api = (function () {
     errorCopy,
     setProvider,
     onProvider: fn => { onProviderChange = fn; },
+    onSinSesion: fn => { onSinSesion = fn; },
+    sinSesion: avisarSinSesion,
+    auth: {
+      yo: () => jsonReq("/api/yo"),
+      ingresar: (usuario, clave) => jsonReq("/api/login", { method: "POST", body: JSON.stringify({ usuario, clave }) }),
+      config: () => jsonReq("/api/auth/config"),
+      google: credential => jsonReq("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) }),
+      salir: () => jsonReq("/api/logout", { method: "POST" }),
+      cambiarClave: datos => jsonReq("/api/contrasena", { method: "POST", body: JSON.stringify(datos) })
+    },
     config: () => jsonReq("/api/config"),
     diagnostico: () => jsonReq("/api/diagnostico"),
     empresa: {
@@ -128,10 +174,20 @@ T.api = (function () {
       save: data => jsonReq("/api/empresa", { method: "PUT", body: JSON.stringify(data) })
     },
     informes: {
-      list: () => jsonReq("/api/informes"),
+      // filtro (opcional): { desde, hasta, candidato, escenario, empresa }. Lo vacío no se manda.
+      list: filtro => jsonReq("/api/informes" + consulta(filtro)),
+      // Candidatos y simulaciones que existen, para los desplegables de los filtros.
+      opciones: filtro => jsonReq("/api/informes/opciones" + consulta(filtro)),
+      // Baja el listado filtrado como archivo. formato: "xlsx" | "pdf". Solo la empresa.
+      exportar: (formato, filtro) => descargar("/api/informes/exportar" + consulta(Object.assign({ formato, zona: zonaHoraria() }, filtro))),
       get: id => jsonReq("/api/informes/" + encodeURIComponent(id)),
       save: data => jsonReq("/api/informes", { method: "POST", body: JSON.stringify(data) }),
-      remove: id => jsonReq("/api/informes/" + encodeURIComponent(id), { method: "DELETE" })
+      remove: id => jsonReq("/api/informes/" + encodeURIComponent(id), { method: "DELETE" }),
+      // Audio de la simulación. Solo lo sube quien la hizo, si aceptó que se grabe; devuelve { ok, audio }.
+      subirAudio: (id, blob, duracionSeg) => jsonReq("/api/informes/" + encodeURIComponent(id) + "/audio" + consulta({ duracion: duracionSeg > 0 ? duracionSeg.toFixed(1) : "" }),
+        { method: "PUT", headers: { "content-type": blob.type || "application/octet-stream" }, body: blob }),
+      // El audio completo, para que el informe haga sonar un tramo (ArrayBuffer).
+      audio: async id => (await pedido("/api/informes/" + encodeURIComponent(id) + "/audio")).arrayBuffer()
     }
   };
 })();

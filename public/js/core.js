@@ -64,8 +64,10 @@
       criterios: crits.filter(Boolean).map(c => ({
         nombre: texto1(c.nombre || c.criterio || c.name),
         puntaje: puntajeCriterio(c.puntaje != null ? c.puntaje : c.score),
+        observado: texto1(c.observado),
         evidencia: texto1(c.evidencia || c.cita || c.evidence),
-        comentario: texto1(c.comentario || c.comment)
+        comentario: texto1(c.comentario || c.comment),
+        paraSubir: texto1(c.paraSubir || c.para_subir)
       })),
       expresion: texto1(raw.expresion)
     };
@@ -105,6 +107,10 @@
     return r || null;
   }
 
+  // Lo que vale cada nivel de 1 a 5 en la escala de 0 a 100. El 3 ("cumple, lo hace bien")
+  // vale 65 y no 50: un 50/100 se lee como un fracaso aunque la persona haya hecho bien la tarea.
+  const VALOR_NIVEL = [null, 0, 35, 65, 85, 100];
+
   // Puntaje de 0 a 100 ponderado por el peso de cada criterio.
   // Solo promedia los criterios que el modelo realmente puntuó e informa la cobertura,
   // para que el informe pueda avisar si quedó incompleto.
@@ -118,15 +124,35 @@
       if (p == null) return;
       let peso = Number(c && c.peso);
       if (!Number.isFinite(peso) || peso <= 0) peso = 1;
-      num += p * peso; den += 5 * peso; cubiertos++;
+      num += VALOR_NIVEL[p] * peso; den += peso; cubiertos++;
     });
-    return { puntaje: den ? Math.round((num / den) * 100) : null, cubiertos, total: defs.length };
+    return { puntaje: den ? Math.round(num / den) : null, cubiertos, total: defs.length };
   }
 
   // ---------------------------------------------------------------- voz
   // Limpia lo que no se tiene que leer en voz alta.
+  // El acento rioplatense a veces se cuela en la transcripción de la voz ("Sho te shamé").
+  // Se corrigen palabras comunes y las raíces de "llamar", "llegar", "llenar" y "llevar";
+  // "show" o "shopping" no se tocan.
+  const SHEISMO = {
+    sho: "yo", sha: "ya", shendo: "yendo", esha: "ella", eshas: "ellas", esho: "ello", eshos: "ellos",
+    cashe: "calle", cashes: "calles", ashá: "allá", ashí: "allí", asher: "ayer", ashuda: "ayuda", masho: "mayo",
+    shuvia: "lluvia", shave: "llave", shaves: "llaves",
+    ehtá: "está", ehtás: "estás", ehtoy: "estoy", ehtamos: "estamos", ehto: "esto", ehta: "esta", mihmo: "mismo", mihma: "misma"
+  };
+  const comoEn = (orig, nueva) => orig === orig.toUpperCase() && orig.length > 1 ? nueva.toUpperCase()
+    : orig[0] === orig[0].toUpperCase() ? nueva[0].toUpperCase() + nueva.slice(1) : nueva;
+  function sinSheismo(t) {
+    return t.replace(/(?<!\p{L})\p{L}+(?!\p{L})/gu, p => {
+      const min = p.toLowerCase();
+      if (SHEISMO[min]) return comoEn(p, SHEISMO[min]);
+      if (/^sh(am|eg|en|ev)/.test(min)) return comoEn(p, "ll" + min.slice(2));
+      return p;
+    });
+  }
+
   function textoHablable(t) {
-    return String(t == null ? "" : t)
+    return sinSheismo(String(t == null ? "" : t))
       .replace(/\[\s*FIN\s*\]/gi, " ")
       .replace(/```[\s\S]*?(```|$)/g, " ")
       .replace(/\*\*?|[_#`>~]/g, "")
@@ -158,6 +184,237 @@
     if (blando >= 30) return blando;
     const esp = t.lastIndexOf(" ", 200);
     return esp > 30 ? esp + 1 : corte;
+  }
+
+  // ---------------------------------------------------------------- filtros de los informes
+  // De los días que elige la persona ("2026-11-10", en su hora) a los instantes que entiende el servidor.
+  // `desde` es el comienzo de ese día y `hasta`, el comienzo del día siguiente (el servidor lo deja afuera):
+  // así "hasta el 10" incluye todo el 10. Un día vacío o que no existe queda en "".
+  function rangoDeDias(desde, hasta) {
+    const comienzo = (dia, sumar) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dia == null ? "" : String(dia));
+      if (!m) return "";
+      const [anio, mes, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+      const fecha = new Date(anio, mes, d);
+      // new Date acepta el 31 de febrero y lo corre a marzo: si no quedó el día pedido, no existe.
+      if (fecha.getFullYear() !== anio || fecha.getMonth() !== mes || fecha.getDate() !== d) return "";
+      return new Date(anio, mes, d + sumar).toISOString();
+    };
+    return { desde: comienzo(desde, 0), hasta: comienzo(hasta, 1) };
+  }
+
+  // ---------------------------------------------------------------- audio de la llamada
+  // Cuando la llamada se graba, cada turno guarda en qué segundo de la grabación empieza y termina (t0 y t1),
+  // para que el informe pueda hacer sonar el momento de una cita.
+
+  const decima = n => Math.round(n * 10) / 10;
+  // Un turno hablado más corto que esto no puede ser: nadie dice una frase en menos de medio segundo.
+  const MIN_TURNO_SEG = 0.5;
+
+  // Calcula los tiempos de cada turno a partir de los eventos que ya emite el motor de voz.
+  // `ahora` es el segundo de la grabación en que pasó cada cosa; null si no se está grabando.
+  //
+  // El cliente: su turno empieza cuando empieza a sonar y termina cuando se cierra.
+  // El candidato: su texto no sirve para saber cuándo empezó, porque Gemini Live lo manda cuando termina
+  // de hablar. Su turno empieza donde terminó el turno anterior (habla cuando el cliente se calla) y
+  // termina cuando llega su último texto; lo que sigue es la espera hasta que el cliente contesta.
+  function cronometroDeTurnos() {
+    let empezoElCliente = null;                       // cuándo empezó a sonar el cliente
+    let primerTexto = null, ultimoTexto = null;       // cuándo llegó el texto del candidato
+    let finAnterior = 0;                              // dónde terminó el último turno cerrado
+    return {
+      // Se le avisa cada evento del motor.
+      evento(ev, ahora) {
+        if (!ev || ahora == null) return;
+        if (ev.type === "interim" && ev.text) {
+          if (primerTexto == null) primerTexto = ahora;
+          ultimoTexto = ahora;
+        }
+        const hablaElCliente = (ev.type === "partial" && ev.text) || (ev.type === "state" && ev.state === "speaking");
+        if (hablaElCliente && empezoElCliente == null) empezoElCliente = ahora;
+      },
+      // Al cerrarse un turno devuelve { t0, t1 }, o null si de ese turno no hay audio:
+      // no se estaba grabando, o el candidato lo escribió con el teclado.
+      cerrar(role, ahora) {
+        let desde, hasta = ahora;
+        if (role === "user") {
+          // Si interrumpió al cliente, su texto pudo llegar antes de que se cerrara el turno del cliente.
+          desde = primerTexto == null ? null : Math.min(finAnterior, primerTexto);
+          // Si el texto llegó pegado al comienzo no dice cuándo terminó de hablar: vale el cierre del turno.
+          if (ultimoTexto - desde >= MIN_TURNO_SEG) hasta = Math.min(ultimoTexto, ahora);
+          primerTexto = ultimoTexto = null;
+        } else {
+          desde = empezoElCliente;
+          empezoElCliente = null;
+        }
+        if (ahora == null) return null;
+        if (desde == null) { finAnterior = ahora; return null; }
+        const t0 = decima(Math.max(0, desde)), t1 = decima(hasta);
+        finAnterior = hasta;
+        return t1 > t0 ? { t0, t1 } : null;
+      }
+    };
+  }
+
+  // Sin tildes, mayúsculas ni signos: para comparar una cita con lo que quedó en la transcripción.
+  const llano = s => (s == null ? "" : String(s)).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  // Un número se escribe corto y se dice largo: "38.000" son 6 letras y "treinta y ocho mil", 18. Para estimar
+  // cuánto tarda en decirse un texto, los números se cuentan como se dicen.
+  const HASTA_29 = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce", "trece", "catorce", "quince",
+    "dieciseis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno", "veintidos", "veintitres", "veinticuatro", "veinticinco", "veintiseis", "veintisiete", "veintiocho", "veintinueve"];
+  const DECENAS = ["", "", "", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"];
+  const CENTENAS = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "quinientos", "seiscientos", "setecientos", "ochocientos", "novecientos"];
+  function hasta999(n) {
+    if (n === 0) return "cero";
+    if (n === 100) return "cien";
+    const resto = n % 100;
+    const decenas = !resto ? "" : resto < 30 ? HASTA_29[resto] : DECENAS[Math.floor(resto / 10)] + (resto % 10 ? " y " + HASTA_29[resto % 10] : "");
+    return [CENTENAS[Math.floor(n / 100)], decenas].filter(Boolean).join(" ");
+  }
+  // Hasta seis cifras, como una cantidad ("seis mil trescientos treinta y tres"). Uno más largo (un DNI, un
+  // número de gestión) o que empieza con cero se dicta cifra por cifra ("ocho ocho uno dos…").
+  const MAX_CIFRAS_DE_CANTIDAD = 6;
+  function numeroDicho(cifras) {
+    if (cifras.length > MAX_CIFRAS_DE_CANTIDAD || (cifras.length > 1 && cifras[0] === "0")) return cifras.split("").map(c => HASTA_29[c]).join(" ");
+    const n = Number(cifras), miles = Math.floor(n / 1000), resto = n % 1000;
+    if (!miles) return hasta999(n);
+    return (miles === 1 ? "" : hasta999(miles) + " ") + "mil" + (resto ? " " + hasta999(resto) : "");
+  }
+  // El texto como se dice en voz alta, sin tildes ni signos: su largo en letras da una idea de cuánto dura.
+  // El punto de los miles ("38.000") no separa dos números.
+  const comoSeDice = t => llano((t == null ? "" : String(t)).replace(/(\d)\.(?=\d{3}(?!\d))/g, "$1").replace(/\d+/g, numeroDicho));
+
+  // Cuántas palabras de `cita` aparecen en el mismo orden, aunque haya otras en el medio, en las primeras
+  // j palabras de `texto`: devuelve la cuenta para cada j (la última es la del texto entero).
+  function enOrdenHasta(cita, texto) {
+    let fila = new Array(texto.length + 1).fill(0);
+    for (let i = 1; i <= cita.length; i++) {
+      const nueva = [0];
+      for (let j = 1; j <= texto.length; j++) nueva[j] = cita[i - 1] === texto[j - 1] ? fila[j - 1] + 1 : Math.max(fila[j], nueva[j - 1]);
+      fila = nueva;
+    }
+    return fila;
+  }
+  const palabrasEnOrden = (cita, texto) => enOrdenHasta(cita, texto)[texto.length];
+
+  // En qué parte del texto de un turno está una cita: { desde, hasta }, de 0 (el comienzo) a 1 (el final),
+  // contado en letras. `partes` y `texto` vienen como se dicen (comoSeDice), para que un número pese lo que dura.
+  function parteDelTurno(partes, texto) {
+    // Las partes que están tal cual marcan el lugar exacto.
+    const lugares = partes.map(parte => ({ parte, en: (" " + texto + " ").indexOf(" " + parte + " ") })).filter(x => x.en >= 0);
+    if (lugares.length) {
+      return { desde: Math.min(...lugares.map(x => x.en)) / texto.length, hasta: Math.max(...lugares.map(x => x.en + x.parte.length)) / texto.length };
+    }
+    // Si no, el tramo más corto que tiene, en orden, todas las palabras que coinciden: termina en la primera
+    // palabra que las completa y empieza lo más tarde que se pueda.
+    const deLaCita = partes.join(" ").split(" "), delTexto = texto.split(" ");
+    const cuenta = enOrdenHasta(deLaCita, delTexto), todas = cuenta[delTexto.length];
+    if (!todas) return { desde: 0, hasta: 1 };
+    const fin = cuenta.indexOf(todas);
+    const ini = fin - enOrdenHasta(deLaCita.slice().reverse(), delTexto.slice(0, fin).reverse()).indexOf(todas);
+    const letrasHasta = n => delTexto.slice(0, n).join(" ").length;
+    return { desde: ini ? (letrasHasta(ini) + 1) / texto.length : 0, hasta: letrasHasta(fin) / texto.length };
+  }
+  // Para aceptar una cita que no está tal cual: cuántas de sus palabras tienen que aparecer en orden,
+  // y qué parte de la cita son. Con menos, dos frases cualesquiera se parecen por las palabras comunes ("que", "de", "la").
+  const MIN_PALABRAS_EN_ORDEN = 4, MIN_PARECIDO = 0.75;
+  // Una cita así de corta ("Disculpame") solo vale si está en un único turno: si está en varios, sería adivinar.
+  const PALABRAS_DE_CITA_CORTA = 2;
+
+  // Busca en qué turno del candidato está una cita del informe. Devuelve { indice, t0, t1, desde, hasta } o null:
+  // el turno, sus tiempos y en qué parte de su texto está la cita (ver parteDelTurno).
+  // Solo mira los turnos del candidato que tienen audio. La cita puede venir recortada, con otros signos,
+  // con puntos suspensivos en el medio o con alguna palabra cambiada. Si no se parece lo suficiente a
+  // ningún turno, no se adivina: null (y el informe no muestra el botón para escucharla).
+  function ubicarCita(turnos, cita) {
+    // El evaluador puede saltear un pedazo con "…" o "[...]": cada parte se busca por separado.
+    const crudas = (cita == null ? "" : String(cita)).split(/\s*(?:\[\s*(?:\.{3}|…)\s*\]|\(\s*(?:\.{3}|…)\s*\)|\.{3,}|…)\s*/).filter(parte => llano(parte));
+    const partes = crudas.map(llano);
+    if (!partes.length) return null;
+    const letras = partes.reduce((n, parte) => n + parte.length, 0);
+    const palabrasDeLaCita = partes.join(" ").split(" ");
+    let mejor = null, empatados = 0;
+    (Array.isArray(turnos) ? turnos : []).forEach((t, indice) => {
+      if (!t || t.role !== "user" || !Number.isFinite(t.t0) || !Number.isFinite(t.t1) || t.t1 <= t.t0) return;
+      const texto = llano(t.text);
+      if (!texto) return;
+      // Puntaje de 0 a 1: qué parte de la cita está, tal cual y con palabras enteras, en este turno.
+      let puntaje = partes.filter(parte => (" " + texto + " ").includes(" " + parte + " ")).reduce((n, parte) => n + parte.length, 0) / letras;
+      if (!puntaje) {
+        const enOrden = palabrasEnOrden(palabrasDeLaCita, texto.split(" "));
+        const parecido = enOrden / palabrasDeLaCita.length;
+        if (enOrden >= MIN_PALABRAS_EN_ORDEN && parecido >= MIN_PARECIDO) puntaje = parecido * 0.9;   // siempre por debajo de una coincidencia exacta
+      }
+      if (!puntaje) return;
+      if (!mejor || puntaje > mejor.puntaje) { mejor = { indice, t0: t.t0, t1: t.t1, puntaje, crudo: t.text }; empatados = 1; }
+      else if (puntaje === mejor.puntaje) empatados++;   // con la misma coincidencia queda el primero
+    });
+    if (!mejor || (palabrasDeLaCita.length <= PALABRAS_DE_CITA_CORTA && empatados > 1)) return null;
+    return Object.assign({ indice: mejor.indice, t0: mejor.t0, t1: mejor.t1 }, parteDelTurno(crudas.map(comoSeDice), comoSeDice(mejor.crudo)));
+  }
+
+  // Cada cuánto se mide el volumen de la grabación para buscar la voz, en segundos.
+  const PASO_VOLUMEN_SEG = 0.05;
+  // Hay voz cuando el volumen pasa esta parte del volumen fuerte del turno, y nunca por debajo del piso
+  // (el soplido de fondo de un micrófono). Así da igual que la persona hable alto o bajo.
+  const PARTE_DEL_VOLUMEN_FUERTE = 0.15, PISO_DE_VOZ = 0.01;
+
+  // Una frase casi siempre empieza después de una pausa. Si la voz vuelve después de un silencio así de largo
+  // a esta distancia o menos del comienzo estimado de la cita, la cita arranca ahí.
+  const PAUSA_SEG = 0.25, CERCA_DE_UNA_PAUSA_SEG = 0.8;
+
+  // En qué tramitos del volumen hay voz: la lista de sus posiciones.
+  function marcosConVoz(niveles) {
+    const fuerte = niveles.slice().sort((a, b) => a - b)[Math.floor(niveles.length * 0.9)];
+    const umbral = Math.max(PISO_DE_VOZ, fuerte * PARTE_DEL_VOLUMEN_FUERTE);
+    const conVoz = [];
+    niveles.forEach((nivel, i) => { if (nivel > umbral) conVoz.push(i); });
+    return conVoz;
+  }
+  const centesima = n => Math.round(n * 100) / 100;
+
+  // De un turno, qué segundos hay que hacer sonar para escuchar una cita. No sabe qué palabra suena en cada
+  // momento: saca los silencios (antes de empezar a hablar, las pausas, la espera del final) y reparte el
+  // texto sobre lo hablado. Si la cita ocupa la segunda mitad del texto, es la segunda mitad de lo hablado.
+  // Es una estimación: quien la usa le suma un margen.
+  //   niveles: el volumen del turno, un valor cada `paso` segundos.
+  //   tramo: lo que devuelve ubicarCita ({ t0, t1, desde, hasta }).
+  // Devuelve { t0, t1 }, en segundos de la grabación. Si no distingue ninguna voz, el turno entero.
+  function tramoDeCita(niveles, paso, tramo) {
+    const entero = { t0: tramo.t0, t1: tramo.t1 };
+    if (!Array.isArray(niveles) || !niveles.length || !(paso > 0)) return entero;
+    const conVoz = marcosConVoz(niveles);
+    if (!conVoz.length) return entero;
+    const parte = (valor, siFalta) => (Number.isFinite(valor) ? Math.min(1, Math.max(0, valor)) : siFalta);
+    let primero = conVoz[Math.min(conVoz.length - 1, Math.floor(parte(tramo.desde, 0) * conVoz.length))];
+    const ultimo = conVoz[Math.max(0, Math.ceil(parte(tramo.hasta, 1) * conVoz.length) - 1)];
+    if (ultimo < primero) return entero;
+    // Donde la voz vuelve después de una pausa: si hay uno cerca del comienzo estimado, ese es el comienzo.
+    const vueltas = conVoz.filter((marco, i) => i === 0 || (marco - conVoz[i - 1] - 1) * paso >= PAUSA_SEG - 1e-9);
+    const cerca = vueltas.filter(marco => marco <= ultimo && Math.abs(marco - primero) * paso <= CERCA_DE_UNA_PAUSA_SEG)
+      .sort((a, b) => Math.abs(a - primero) - Math.abs(b - primero))[0];
+    if (cerca !== undefined) primero = cerca;
+    return { t0: centesima(tramo.t0 + primero * paso), t1: centesima(Math.min(tramo.t1, tramo.t0 + (ultimo + 1) * paso)) };
+  }
+
+  // Para iluminar la cita mientras suena: en qué segundo de la grabación empieza cada palabra de `texto`.
+  // `niveles` es el volumen del tramo que suena (desde el segundo t0, un valor cada `paso` segundos). Reparte
+  // las palabras sobre lo hablado, cada una según lo que tarda en decirse. Es una estimación, como tramoDeCita.
+  // Devuelve un tiempo por palabra (separadas por espacios), o [] si no hay volumen o no hay texto.
+  function tiemposDePalabras(niveles, paso, t0, texto) {
+    const palabras = (texto == null ? "" : String(texto)).split(/\s+/).filter(Boolean);
+    if (!Array.isArray(niveles) || !niveles.length || !palabras.length) return [];
+    let marcos = marcosConVoz(niveles);
+    if (!marcos.length) marcos = niveles.map((_, i) => i);   // sin voz a la vista: parejo sobre todo el tramo
+    const pesos = palabras.map(palabra => comoSeDice(palabra).length + 1);   // el 1 es el espacio
+    const total = pesos.reduce((a, b) => a + b, 0);
+    let dicho = 0;
+    return pesos.map(peso => {
+      const marco = marcos[Math.min(marcos.length - 1, Math.floor(dicho / total * marcos.length))];
+      dicho += peso;
+      return centesima(t0 + marco * paso);
+    });
   }
 
   // ---------------------------------------------------------------- configuración de la empresa
@@ -233,6 +490,8 @@
     c.escenarios = Array.isArray(c.escenarios) ? c.escenarios : [];
     c.criterios = Array.isArray(c.criterios) ? c.criterios : [];
     c.notasEvaluacion = str(c.notasEvaluacion);
+    // La voz del cliente suena como por teléfono (filtro de Gemini Live). Prendida salvo que la apaguen.
+    c.vozTelefonica = c.vozTelefonica !== false;
     return c;
   }
 
@@ -250,7 +509,81 @@
   }
   const esSoftware = cfg => /software|sistemas|tecnolog|desarrollo|programaci|inform[aá]tica|\bit\b|saas/i.test(str(cfg && cfg.rubro));
 
-  const api = { normalizarHistorial, extraerJSON, parseEvaluacion, puntajeCriterio, puntajePonderado, buscarCriterio, clave, textoHablable, largoDecible,
+  // ------------------------------------------------------------------
+  // Datos de la llamada: lo que pasó además de lo que se dijo (cuánto habló cada uno, si interrumpió,
+  // qué ayudas usó). Se calculan al terminar la llamada con lo que la app ya sabe: sin IA y sin costo.
+  // No cambian el puntaje; son para que la empresa lea el informe con más contexto.
+  // ------------------------------------------------------------------
+  const cuantasPalabras = texto => (str(texto).trim().match(/\S+/g) || []).length;
+  const cuenta = v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+
+  // datos: { turnos, motivo, motor, uso }
+  //   turnos   los de la llamada: { role, text } y, si se grabó, t0 y t1 (segundos).
+  //   motivo   el del evento "end" del motor: "user" (cortó el candidato) o "fin" (terminó la conversación).
+  //   motor    "gemini-live" | "vapi" | "browser".
+  //   uso      lo que anotó la pantalla de la llamada: { interrupciones, fichaDisponible, fichaAbiertaAlEmpezar,
+  //            fichaAperturas, fichaCopias, turnosEscritos, micSilenciado, avisos, grabada }.
+  // Lo que no viene o no se entiende cuenta como cero: nunca se inventa un dato.
+  function metricasDeLlamada(datos) {
+    const d = datos && typeof datos === "object" ? datos : {};
+    const uso = d.uso && typeof d.uso === "object" ? d.uso : {};
+    const turnos = Array.isArray(d.turnos) ? d.turnos.filter(t => t && (t.role === "user" || t.role === "assistant")) : [];
+    const candidato = turnos.filter(t => t.role === "user"), cliente = turnos.filter(t => t.role === "assistant");
+    const palabras = lista => lista.reduce((n, t) => n + cuantasPalabras(t.text), 0);
+    const conTiempos = lista => lista.filter(t => Number.isFinite(t.t0) && Number.isFinite(t.t1) && t.t1 > t.t0);
+    const segundos = lista => decima(conTiempos(lista).reduce((n, t) => n + (t.t1 - t.t0), 0));
+    const delCandidato = palabras(candidato), delCliente = palabras(cliente);
+    const hayTiempos = conTiempos(turnos).length > 0;
+    return {
+      version: 1,
+      turnos: { candidato: candidato.length, cliente: cliente.length },
+      palabras: { candidato: delCandidato, cliente: delCliente },
+      // De todo lo que se dijo, qué parte dijo el candidato (0 a 100).
+      parteDelCandidato: delCandidato + delCliente ? Math.round(100 * delCandidato / (delCandidato + delCliente)) : null,
+      respuestaMasLarga: candidato.reduce((max, t) => Math.max(max, cuantasPalabras(t.text)), 0),
+      // Solo con grabación. El turno del candidato va desde que terminó el cliente hasta que terminó de hablar:
+      // incluye la pausa de antes de contestar, así que no es "tiempo hablando".
+      tiempoDeTurnos: hayTiempos ? { candidatoSeg: segundos(candidato), clienteSeg: segundos(cliente) } : null,
+      interrupciones: cuenta(uso.interrupciones),
+      fin: d.motivo === "user" ? "candidato" : d.motivo === "fin" ? "conversacion" : "desconocido",
+      ayudas: {
+        ficha: uso.fichaDisponible ? { abiertaAlEmpezar: Boolean(uso.fichaAbiertaAlEmpezar), aperturas: cuenta(uso.fichaAperturas), copias: cuenta(uso.fichaCopias) } : null,
+        turnosEscritos: Math.min(cuenta(uso.turnosEscritos), candidato.length),
+        micSilenciado: cuenta(uso.micSilenciado)
+      },
+      tecnico: { motor: str(d.motor), grabada: Boolean(uso.grabada), avisos: cuenta(uso.avisos) }
+    };
+  }
+
+  // Las métricas dichas en frases, para el bloque "Datos de la llamada" del informe.
+  // nombresDeMotor: { "gemini-live": "Gemini Live", ... } (los nombres los tiene la pantalla).
+  function describirMetricas(m, nombresDeMotor) {
+    if (!m || typeof m !== "object" || !m.turnos || !m.palabras) return [];
+    const veces = (n, una, varias) => (n === 1 ? una : varias.replace("#", n));
+    const minSeg = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+    const frases = [];
+    frases.push(`Turnos: ${m.turnos.candidato} del candidato y ${m.turnos.cliente} del cliente.`);
+    frases.push(`Palabras: ${m.palabras.candidato} del candidato` + (m.parteDelCandidato == null ? "" : ` (${m.parteDelCandidato} % de lo que se dijo)`) +
+      ` y ${m.palabras.cliente} del cliente.` + (m.respuestaMasLarga ? ` Su respuesta más larga tuvo ${veces(m.respuestaMasLarga, "1 palabra", "# palabras")}.` : ""));
+    if (m.tiempoDeTurnos) frases.push(`Tiempo de los turnos: ${minSeg(m.tiempoDeTurnos.candidatoSeg)} del candidato (incluye la pausa antes de contestar) y ${minSeg(m.tiempoDeTurnos.clienteSeg)} del cliente.`);
+    frases.push(m.interrupciones ? `Interrumpió al cliente ${veces(m.interrupciones, "1 vez", "# veces")}.` : "No interrumpió al cliente.");
+    if (m.fin === "candidato") frases.push("La llamada la cortó el candidato.");
+    if (m.fin === "conversacion") frases.push("La llamada terminó sola: el cliente se despidió o se cortó la conexión.");
+    const a = m.ayudas || {};
+    if (a.ficha) {
+      const abrio = a.ficha.aperturas ? `la abrió ${veces(a.ficha.aperturas, "1 vez", "# veces")}` : a.ficha.abiertaAlEmpezar ? "" : "no la abrió";
+      const partes = [a.ficha.abiertaAlEmpezar ? "la tenía abierta al empezar" : "", abrio, a.ficha.copias ? `copió ${veces(a.ficha.copias, "1 dato", "# datos")}` : ""].filter(Boolean);
+      frases.push(`“Lo que tenés a mano”: ${partes.join(", ")}.`);
+    }
+    if (a.turnosEscritos) frases.push(`Escribió con el teclado ${veces(a.turnosEscritos, "1 de sus respuestas", "# de sus respuestas")}.`);
+    if (a.micSilenciado) frases.push(`Silenció el micrófono ${veces(a.micSilenciado, "1 vez", "# veces")}.`);
+    const t = m.tecnico || {};
+    const motor = (nombresDeMotor && nombresDeMotor[t.motor]) || t.motor;
+    if (motor) frases.push(`Voz: ${motor}, ${t.grabada ? "con grabación" : "sin grabación"}.` + (t.avisos ? ` Hubo ${veces(t.avisos, "1 aviso de error", "# avisos de error")} durante la llamada.` : ""));
+    return frases;
+  }
+
+  const api = { metricasDeLlamada, describirMetricas, normalizarHistorial, extraerJSON, parseEvaluacion, puntajeCriterio, puntajePonderado, buscarCriterio, clave, textoHablable, largoDecible, rangoDeDias, cronometroDeTurnos, comoSeDice, ubicarCita, tramoDeCita, tiemposDePalabras, PASO_VOLUMEN_SEG,
     GENERALES, ACCIONES_JUNIOR, esFormatoViejo, migrarConfig, normalizarConfig, contextoDe, responsableTexto, esSoftware, nuevoId };
 
   if (typeof module === "object" && module.exports) module.exports = api;

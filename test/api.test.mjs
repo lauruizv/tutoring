@@ -66,7 +66,8 @@ describe("servidor con Gemini", () => {
   });
 
   test("informes: POST, GET lista, GET por id y DELETE", async () => {
-    const post = await pedir(app.base, "/api/informes", { method: "POST", json: INFORME });
+    // Lo guarda el candidato (estudiante1 = Lucas Ferreyra); lo lista y lo borra la empresa.
+    const post = await pedir(app.base, "/api/informes", { method: "POST", json: INFORME, cookie: await app.ingresar("estudiante1") });
     assert.equal(post.status, 200);
     const id = post.cuerpo.id;
     assert.match(id, /^[0-9a-f-]{36}$/);
@@ -74,11 +75,13 @@ describe("servidor con Gemini", () => {
     const lista = await pedir(app.base, "/api/informes");
     assert.equal(lista.status, 200);
     const fila = lista.cuerpo.find(r => r.id === id);
-    assert.deepEqual(fila, { id, candidato: "Lucas Ferreyra", empresa: INFORME.empresa, escenario: "Recordatorios duplicados", fecha: INFORME.fecha, puntaje: 78 });
+    // Una cuenta con contraseña no tiene mail: la fila lleva su id de usuario y el mail vacío.
+    assert.match(fila.usuarioId, /^u_[0-9a-f]+$/);
+    assert.deepEqual(fila, { id, usuarioId: fila.usuarioId, candidato: "Lucas Ferreyra", email: "", empresa: INFORME.empresa, escenario: "Recordatorios duplicados", fecha: INFORME.fecha, puntaje: 78, duracionSeg: 240 });
 
     const uno = await pedir(app.base, `/api/informes/${id}`);
     assert.equal(uno.status, 200);
-    assert.equal(uno.cuerpo.evaluacion.criterios.length, 6);
+    assert.equal(uno.cuerpo.evaluacion.criterios.length, 7);
 
     assert.equal((await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" })).status, 200);
     assert.equal((await pedir(app.base, `/api/informes/${id}`)).status, 404);
@@ -96,8 +99,103 @@ describe("servidor con Gemini", () => {
     for (const id of ids) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
   });
 
+  test("informes: la lista se filtra por fechas, candidato, simulación y empresa", async () => {
+    const lucas = await app.ingresar("estudiante1"), otro = await app.ingresar("estudiante2");
+    const crear = async (cookie, extra) => (await pedir(app.base, "/api/informes", { method: "POST", cookie, json: { ...INFORME, ...extra } })).cuerpo.id;
+    const cobranza = { titulo: "Llamada de cobranza", resumen: "r", cliente: "Diego Sosa", objetivo: "o" };
+    const a = await crear(lucas, { fecha: "2026-11-10T15:00:00.000Z" });
+    const b = await crear(lucas, { fecha: "2026-11-05T12:00:00.000Z", escenario: cobranza });
+    const c = await crear(otro, { fecha: "2026-11-08T12:00:00.000Z", escenario: cobranza, empresa: "MKT Contact Center" });
+    const nombreDelOtro = (await pedir(app.base, "/api/informes/" + c)).cuerpo.candidato;
+    const ids = async consulta => {
+      const r = await pedir(app.base, "/api/informes?" + new URLSearchParams(consulta));
+      assert.equal(r.status, 200, JSON.stringify(consulta));
+      return r.cuerpo.map(x => x.id);
+    };
+
+    assert.deepEqual(await ids({}), [a, c, b], "sin filtros, todos, del más nuevo al más viejo");
+    assert.deepEqual(await ids({ desde: "2026-11-06T00:00:00.000Z" }), [a, c]);
+    assert.deepEqual(await ids({ desde: "2026-11-06T00:00:00.000Z", hasta: "2026-11-09T00:00:00.000Z" }), [c]);
+    assert.deepEqual(await ids({ candidato: "FERREYRA" }), [a, b], "sin importar mayúsculas");
+    assert.deepEqual(await ids({ candidato: nombreDelOtro }), [c]);
+    assert.deepEqual(await ids({ escenario: "Llamada de cobranza" }), [c, b]);
+    assert.deepEqual(await ids({ escenario: "Llamada de cobranza", candidato: "ferreyra" }), [b], "los filtros se suman");
+    assert.deepEqual(await ids({ empresa: "MKT Contact Center" }), [c]);
+    assert.deepEqual(await ids({ candidato: "no existe nadie así" }), []);
+
+    const opciones = await pedir(app.base, "/api/informes/opciones");
+    assert.equal(opciones.status, 200);
+    assert.deepEqual(opciones.cuerpo, {
+      candidatos: ["Lucas Ferreyra", nombreDelOtro].sort((x, y) => x.localeCompare(y, "es")),
+      escenarios: ["Llamada de cobranza", "Recordatorios duplicados"]
+    });
+    assert.deepEqual((await pedir(app.base, "/api/informes/opciones?empresa=MKT+Contact+Center")).cuerpo, { candidatos: [nombreDelOtro], escenarios: ["Llamada de cobranza"] });
+    assert.equal((await pedir(app.base, "/api/informes/opciones", { method: "POST", json: {} })).status, 405);
+
+    for (const id of [a, b, c]) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
+  });
+
+  test("informes: exportar baja como archivo el listado con los mismos filtros que la lista", async () => {
+    const lucas = await app.ingresar("estudiante1"), otro = await app.ingresar("estudiante2");
+    const crear = async (cookie, extra) => (await pedir(app.base, "/api/informes", { method: "POST", cookie, json: { ...INFORME, ...extra } })).cuerpo.id;
+    const cobranza = { titulo: "Llamada de cobranza", resumen: "r", cliente: "Diego Sosa", objetivo: "o" };
+    const ids = [
+      await crear(lucas, { fecha: "2026-11-10T15:00:00.000Z" }),
+      await crear(lucas, { fecha: "2026-11-05T12:00:00.000Z", escenario: cobranza }),
+      await crear(otro, { fecha: "2026-11-08T12:00:00.000Z", escenario: cobranza })
+    ];
+    // Se prueba con PDF. El contenido del Excel y del PDF se prueba en test/exportar.test.mjs.
+    const exportar = consulta => pedir(app.base, "/api/informes/exportar?" + new URLSearchParams({ formato: "pdf", ...consulta }));
+
+    const todo = await exportar({});
+    assert.equal(todo.status, 200);
+    assert.equal(todo.headers.get("content-type"), "application/pdf");
+    assert.match(todo.headers.get("content-disposition"), /^attachment; filename="informes-\d{4}-\d{2}-\d{2}\.pdf"$/);
+    assert.equal(todo.headers.get("cache-control"), "no-store");
+    assert.equal(todo.headers.get("x-informes"), "3");
+    assert.ok(todo.texto.startsWith("%PDF-"), "es un PDF");
+
+    // Los mismos filtros que la lista: lleva los mismos informes.
+    for (const consulta of [{ candidato: "ferreyra" }, { escenario: "Llamada de cobranza" }, { desde: "2026-11-06T00:00:00.000Z", hasta: "2026-11-09T00:00:00.000Z" }, { candidato: "no existe nadie así" }]) {
+      const lista = (await pedir(app.base, "/api/informes?" + new URLSearchParams(consulta))).cuerpo;
+      const archivo = await exportar(consulta);
+      assert.equal(archivo.status, 200, JSON.stringify(consulta));
+      assert.equal(archivo.headers.get("x-informes"), String(lista.length), JSON.stringify(consulta));
+    }
+    assert.equal((await exportar({ candidato: "ferreyra" })).headers.get("x-informes"), "2");
+    assert.equal((await exportar({ zona: "Marte/Olympus" })).status, 200, "una zona horaria que no existe no rompe la exportación");
+
+    for (const id of ids) await pedir(app.base, `/api/informes/${id}`, { method: "DELETE" });
+  });
+
+  test("informes: exportar rechaza con el motivo un formato desconocido, una fecha inválida y otros métodos", async () => {
+    for (const formato of ["csv", "", "XLSX", "constructor"]) {
+      const r = await pedir(app.base, "/api/informes/exportar?formato=" + formato);
+      assert.equal(r.status, 400, formato);
+      assert.match(r.cuerpo.error.message, /xlsx, pdf/, formato);
+    }
+    const sinFormato = await pedir(app.base, "/api/informes/exportar");
+    assert.equal(sinFormato.status, 400);
+    const fecha = await pedir(app.base, "/api/informes/exportar?formato=pdf&desde=ayer");
+    assert.equal(fecha.status, 400);
+    assert.match(fecha.cuerpo.error.message, /desde/);
+    assert.equal((await pedir(app.base, "/api/informes/exportar?formato=pdf", { method: "POST", json: {} })).status, 405);
+  });
+
+  test("informes: una fecha que no se entiende o un rango al revés responden 400 con el motivo", async () => {
+    for (const ruta of ["/api/informes", "/api/informes/opciones"]) {
+      const r = await pedir(app.base, ruta + "?desde=ayer");
+      assert.equal(r.status, 400, ruta);
+      assert.match(r.cuerpo.error.message, /desde/);
+    }
+    const alReves = await pedir(app.base, "/api/informes?desde=2026-11-10T00:00:00.000Z&hasta=2026-11-01T00:00:00.000Z");
+    assert.equal(alReves.status, 400);
+    assert.match(alReves.cuerpo.error.message, /al revés/);
+  });
+
   test("informes: rechaza cuerpos que no son informes", async () => {
-    for (const json of [[1, 2], { candidato: "x" }, { evaluacion: {} }]) {
+    // El candidato ya no hace falta: lo pone el servidor desde la sesión.
+    for (const json of [[1, 2], { candidato: "x" }, { evaluacion: [] }]) {
       const r = await pedir(app.base, "/api/informes", { method: "POST", json });
       assert.equal(r.status, 400);
       assert.ok(r.cuerpo.error.message);
@@ -295,8 +393,20 @@ describe("servidor con Claude (anthropic)", () => {
     });
     assert.equal(r.status, 200);
     const ev = JSON.parse(r.texto);
-    assert.equal(ev.criterios.length, 6);
+    assert.equal(ev.criterios.length, 7);
     assert.ok(!/clave-de-prueba/.test(r.bruto));
+  });
+
+  test("la llamada y su informe suman una línea [SIM] en el log", async () => {
+    const simulacion = "sim-prueba-1";
+    const uso = { simulacion, modelo: "gemini-3.8-live", segundos: 60, turnos: 2, entrada: 1000, entradaTexto: 1000, entradaAudio: 0, salida: 0, salidaAudio: 0, salidaTexto: 0, pensamiento: 0 };
+    assert.equal((await pedir(app.base, "/api/voz/uso", { method: "POST", json: uso })).status, 200);
+    const r = await pedirMensajes(app.base, { purpose: "eval", simulacion, system: "Sos un evaluador riguroso y justo.", messages: [{ role: "user", content: "evaluá esto" }] });
+    assert.equal(r.status, 200);
+    assert.ok(!("simulacion" in app.fake.calls.at(-1).payload), "el id de simulación no llega al proveedor");
+    const dir = path.join(app.dataDir, "logs");
+    const log = fs.readFileSync(path.join(dir, fs.readdirSync(dir).find(f => /^ia-.*\.log$/.test(f))), "utf8");
+    assert.match(log, /\[SIM\] #\w+ simulación · llamada US\$0\.0008 \+ informe US\$0\.0000 \(una parte sin precio\) = total US\$0\.0008/);
   });
 
   test("messages: manda x-api-key y no la expone", async () => {
@@ -342,6 +452,16 @@ describe("voz con Gemini Live: token efímero", () => {
     const vence = Date.parse(pedido.payload.expireTime) - Date.now();
     assert.ok(vence > 25 * 60e3 && vence <= 30 * 60e3, "vence en unos 30 minutos");
     assert.ok(Date.parse(pedido.payload.newSessionExpireTime) - Date.now() <= 60e3, "hay que abrir la sesión en menos de un minuto");
+  });
+
+  test("POST /api/voz/uso escribe los tokens de la llamada en el log de la IA", async () => {
+    const uso = { modelo: "gemini-test-live", segundos: 95, turnos: 4, entrada: 2400, entradaTexto: 1500, entradaAudio: 900, salida: 310, salidaAudio: 300, salidaTexto: 10, pensamiento: 120 };
+    const { status } = await pedir(app.base, "/api/voz/uso", { method: "POST", json: uso });
+    assert.equal(status, 200);
+    const dir = path.join(app.dataDir, "logs");
+    const archivo = fs.readdirSync(dir).find(f => /^ia-.*\.log$/.test(f));
+    const log = fs.readFileSync(path.join(dir, archivo), "utf8");
+    assert.match(log, /\[VOZ\] gemini-live · gemini-test-live · llamada · 95s .*4 turnos · tokens in=2400 \(texto=1500 audio=900\) out=310 \(audio=300 texto=10\) pensamiento=120/);
   });
 
   test("GET /api/voz/token no está permitido", async () => {

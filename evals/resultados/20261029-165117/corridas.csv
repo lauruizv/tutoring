@@ -1,0 +1,16 @@
+﻿caso,corrida,ok,error,proveedor,segundos,puntaje_total,cubiertos,total_criterios,Escucha activa,Empatía y control emocional,Claridad,Procedimiento,Resolución,Cierre
+cal-mkt-01-excelente,1,True,,principal,18.193,71,6,6,4,4,3,4,4,4
+cal-mkt-01-excelente,2,True,,principal,17.103,71,6,6,4,4,3,4,4,4
+cal-mkt-01-excelente,3,True,,principal,16.4,79,6,6,4,4,4,5,4,4
+cal-mkt-02-bueno,1,True,,principal,19.745,54,6,6,3,2,3,4,3,4
+cal-mkt-02-bueno,2,True,,principal,18.137,54,6,6,3,2,3,4,3,4
+cal-mkt-02-bueno,3,True,,principal,16.841,54,6,6,3,2,3,4,3,4
+cal-mkt-03-mediocre,1,True,,principal,15.28,25,6,6,2,2,2,2,2,2
+cal-mkt-03-mediocre,2,True,,principal,17.214,29,6,6,2,2,2,3,2,2
+cal-mkt-03-mediocre,3,True,,principal,16.209,29,6,6,2,2,2,3,2,2
+cal-mkt-04-malo,1,True,,principal,16.747,4,6,6,1,1,1,2,1,1
+cal-mkt-04-malo,2,True,,principal,16.979,8,6,6,1,1,1,2,2,1
+cal-mkt-04-malo,3,True,,principal,16.81,8,6,6,1,1,1,2,2,1
+cal-mkt-05-falla-compliance,1,True,,principal,15.633,0,6,6,1,1,1,1,1,1
+cal-mkt-05-falla-compliance,2,True,,principal,15.801,4,6,6,1,1,2,1,1,1
+cal-mkt-05-falla-compliance,3,True,,principal,15.868,0,6,6,1,1,1,1,1,1
